@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { CheckCircle2Icon } from "lucide-react";
 
 import {
@@ -39,11 +39,17 @@ function PasswordField({
   label = "Senha",
   autoComplete,
   hint,
+  value,
+  onChange,
+  invalid,
 }: {
   name?: string;
   label?: string;
   autoComplete: "current-password" | "new-password";
   hint?: string;
+  value?: string;
+  onChange?: (value: string) => void;
+  invalid?: boolean;
 }) {
   return (
     <label className="block space-y-1.5">
@@ -54,9 +60,45 @@ function PasswordField({
         autoComplete={autoComplete}
         minLength={autoComplete === "new-password" ? 8 : undefined}
         required
+        value={value}
+        onChange={onChange && ((e) => onChange(e.target.value))}
+        aria-invalid={invalid || undefined}
       />
       {hint && <span className="text-muted-foreground text-xs">{hint}</span>}
     </label>
+  );
+}
+
+/**
+ * Senha + confirmação controladas: o React limpa campos não controlados após
+ * cada envio, e o usuário acabava redigitando só um deles depois de um erro.
+ */
+function NewPasswordFields({ label = "Senha" }: { label?: string }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const mismatch = confirm.length > 0 && confirm !== password;
+
+  return (
+    <>
+      <PasswordField
+        label={label}
+        autoComplete="new-password"
+        hint="Pelo menos 8 caracteres."
+        value={password}
+        onChange={setPassword}
+      />
+      <div className="space-y-1.5">
+        <PasswordField
+          name="confirm"
+          label={`Repita a ${label.toLowerCase()}`}
+          autoComplete="new-password"
+          value={confirm}
+          onChange={setConfirm}
+          invalid={mismatch}
+        />
+        {mismatch && <p className="text-negative text-xs">As senhas não conferem.</p>}
+      </div>
+    </>
   );
 }
 
@@ -120,8 +162,7 @@ export function SignUpForm() {
   return (
     <form action={action} className="space-y-4">
       <EmailField value={state.email} />
-      <PasswordField autoComplete="new-password" hint="Pelo menos 8 caracteres." />
-      <PasswordField name="confirm" label="Repita a senha" autoComplete="new-password" />
+      <NewPasswordFields />
       <Feedback state={state} />
       <Submit pending={pending} idle="Criar conta" busy="Criando…" />
     </form>
@@ -146,12 +187,7 @@ export function ResetPasswordForm() {
 
   return (
     <form action={action} className="space-y-4">
-      <PasswordField
-        label="Nova senha"
-        autoComplete="new-password"
-        hint="Pelo menos 8 caracteres."
-      />
-      <PasswordField name="confirm" label="Repita a nova senha" autoComplete="new-password" />
+      <NewPasswordFields label="Nova senha" />
       <Feedback state={state} />
       <Submit pending={pending} idle="Salvar senha" busy="Salvando…" />
     </form>
