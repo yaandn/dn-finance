@@ -37,6 +37,8 @@ function describe(error: AuthError) {
       return "E-mail inválido.";
     case "signup_disabled":
       return "O cadastro está fechado no momento.";
+    case "user_already_exists":
+      return "Já existe uma conta com este e-mail. Entre ou use \"Esqueci minha senha\".";
     case "same_password":
       return "A nova senha precisa ser diferente da atual.";
     case "email_address_not_authorized":
@@ -93,12 +95,11 @@ export async function signUp(
     options: { emailRedirectTo: `${await appOrigin()}/auth/confirm?next=/` },
   });
   if (error) return fail(describe(error), email);
-  // Sem confirmação de e-mail ativa, o Supabase já devolve a sessão
+  // Com a confirmação de e-mail desligada, o Supabase já devolve a sessão
   if (data.session) redirect("/");
-  // A mesma mensagem para e-mail novo ou já cadastrado: não revela quem tem conta
   return {
     error: null,
-    done: `Enviamos um link de confirmação para ${email}. Abra o e-mail para ativar a conta.`,
+    done: "Conta criada. Entre com o e-mail e a senha que você escolheu.",
     email,
   };
 }

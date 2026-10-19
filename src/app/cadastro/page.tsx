@@ -10,7 +10,7 @@ export default function SignUpPage() {
   return (
     <AuthCard
       title="Criar conta"
-      description="Depois do cadastro, enviamos um link para confirmar o seu e-mail."
+      description="Crie sua conta com e-mail e senha. Você entra na hora."
       footer={
         <>
           <p>
