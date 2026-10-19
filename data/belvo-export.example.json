@@ -1,0 +1,27 @@
+{
+  "_comment": "Renomeie para belvo-export.json. Aceita os objetos crus da API Belvo (/api/accounts e /api/transactions) ou o formato do conector Belvo MCP.",
+  "accounts": [
+    {
+      "account_id": "conta-1",
+      "institution": { "name": "ofnubank_br_retail", "display_name": "Nubank" },
+      "category": "CHECKING_ACCOUNT",
+      "name": "Conta",
+      "currency": "BRL",
+      "balance_type": "ASSET",
+      "balance": { "current": 1000, "available": 1000 }
+    }
+  ],
+  "transactions": [
+    {
+      "transaction_id": "t-1",
+      "account_id": "conta-1",
+      "date": "2026-10-10",
+      "amount": 42.5,
+      "type": "OUTFLOW",
+      "description": "Compra no débito|Padaria",
+      "category": "Food & Groceries",
+      "subcategory": "Bakery & Coffee",
+      "operation_type": "CARTAO"
+    }
+  ]
+}

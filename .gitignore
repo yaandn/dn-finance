@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Exportações reais da Belvo (dados financeiros pessoais)
+data/*.json
+!data/belvo-export.example.json
+!.env.example
