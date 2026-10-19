@@ -1,4 +1,5 @@
 import { GAMBLING, OTHER_BANK_BILLS, looksLikeSubscription } from "@/lib/finance/categories";
+import { buildBills } from "@/lib/finance/bills";
 import type { Account, FinanceSnapshot, Period, Transaction } from "@/lib/finance/types";
 
 export type CategoryTotal = { category: string; total: number; count: number; share: number };
@@ -141,31 +142,15 @@ export function analyze(snapshot: FinanceSnapshot, period: Period): Analysis {
         detail: `R$ ${used.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} de R$ ${limit.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}, contando parcelas futuras.`,
       });
     }
+  }
 
-    // Fatura fechada e vencida sem pagamento equivalente identificado
-    const bills = new Map<string, { due: string; amount: number }>();
-    for (const t of snapshot.transactions) {
-      if (t.accountId !== c.id || !t.bill?.dueDate || !t.bill.amount) continue;
-      bills.set(t.bill.dueDate, { due: t.bill.dueDate, amount: t.bill.amount });
-    }
-    for (const bill of bills.values()) {
-      if (bill.due >= today) continue;
-      const paid = snapshot.transactions
-        .filter(
-          (t) =>
-            t.accountId === c.id &&
-            t.type === "INFLOW" &&
-            t.internalReason === "Pagamento da fatura do próprio cartão",
-        )
-        .reduce((s, t) => s + t.amount, 0);
-      if (paid + 1 < bill.amount) {
-        alerts.push({
-          level: "danger",
-          title: `Fatura do ${c.institution} de ${bill.due.split("-").reverse().join("/")} pode não estar quitada`,
-          detail: `Fatura de R$ ${bill.amount.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}; pagamentos identificados no período: R$ ${paid.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}. Se pagou por outro banco, ignore.`,
-        });
-      }
-    }
+  // Faturas fechadas e vencidas sem pagamento equivalente identificado
+  for (const b of buildBills(snapshot, today, period.from).overdue) {
+    alerts.push({
+      level: "danger",
+      title: `Fatura do ${b.account.institution} de ${b.dueDate!.split("-").reverse().join("/")} pode não estar quitada`,
+      detail: `Fatura de R$ ${b.amount.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}; pagamentos identificados: R$ ${b.paid.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}. Se pagou por outro banco, ignore.`,
+    });
   }
 
   for (const l of loans) {

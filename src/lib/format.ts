@@ -25,3 +25,21 @@ export function longDate(iso: string | null | undefined) {
 export function weekday(iso: string) {
   return new Date(`${iso}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "short" });
 }
+
+const MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+
+/** "2026-10" -> "out/26" */
+export function monthShort(month: string) {
+  const [y, m] = month.split("-").map(Number);
+  return `${MONTHS[m - 1]}/${String(y).slice(2)}`;
+}
+
+/** "2026-10" -> "Outubro de 2026" */
+export function monthLong(month: string) {
+  const [y, m] = month.split("-").map(Number);
+  const name = new Date(Date.UTC(y, m - 1, 15)).toLocaleDateString("pt-BR", {
+    month: "long",
+    timeZone: "UTC",
+  });
+  return `${name[0].toUpperCase()}${name.slice(1)} de ${y}`;
+}

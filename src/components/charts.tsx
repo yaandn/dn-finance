@@ -2,6 +2,7 @@
 
 import {
   Bar,
+  BarChart,
   CartesianGrid,
   Cell,
   ComposedChart,
@@ -19,7 +20,7 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
-import { longDate, money, moneyCompact, shortDate } from "@/lib/format";
+import { longDate, money, moneyCompact, monthLong, monthShort, shortDate } from "@/lib/format";
 import type { CategoryTotal, DailyPoint } from "@/lib/finance/analyze";
 
 const cashflowConfig = {
@@ -139,6 +140,67 @@ export function CategoryDonut({ data, total }: { data: CategoryTotal[]; total: n
           {moneyCompact(total)}
         </text>
       </PieChart>
+    </ChartContainer>
+  );
+}
+
+export function BillsChart({
+  data,
+  series,
+  currentMonth,
+}: {
+  data: { month: string; [k: string]: number | string }[];
+  series: { key: string; label: string }[];
+  currentMonth: string;
+}) {
+  const config = Object.fromEntries(
+    series.map((s, i) => [s.key, { label: s.label, color: `var(--chart-${(i % 5) + 1})` }]),
+  ) satisfies ChartConfig;
+
+  return (
+    <ChartContainer config={config} className="aspect-auto h-[240px] w-full">
+      <BarChart data={data} margin={{ left: 4, right: 8, top: 8 }}>
+        <CartesianGrid vertical={false} strokeDasharray="3 3" />
+        <XAxis
+          dataKey="month"
+          tickLine={false}
+          axisLine={false}
+          tickMargin={8}
+          interval={0}
+          fontSize={11}
+          tickFormatter={(m: string) => (m === currentMonth ? `${monthShort(m)} •` : monthShort(m))}
+        />
+        <YAxis
+          tickLine={false}
+          axisLine={false}
+          width={64}
+          tickFormatter={(v: number) => moneyCompact(v)}
+        />
+        <ChartTooltip
+          cursor={{ fill: "var(--muted)", opacity: 0.5 }}
+          content={({ active, payload, label }) => (
+            <ChartTooltipContent
+              active={active}
+              label={label}
+              labelFormatter={(l) => monthLong(String(l))}
+              valueFormatter={(v) => money(v)}
+              payload={payload
+                ?.filter((p) => Number(p.value) > 0)
+                .map((p) => ({ name: String(p.dataKey), value: Number(p.value), color: p.color }))}
+            />
+          )}
+        />
+        {series.map((s, i) => (
+          <Bar
+            key={s.key}
+            dataKey={s.key}
+            stackId="faturas"
+            fill={`var(--color-${s.key})`}
+            radius={i === series.length - 1 ? [4, 4, 0, 0] : 0}
+            isAnimationActive={false}
+          />
+        ))}
+      </BarChart>
     </ChartContainer>
   );
 }

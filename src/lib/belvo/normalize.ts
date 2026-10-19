@@ -122,6 +122,12 @@ export function normalizeAccount(a: Raw): Account {
   };
 }
 
+function addMonths(month: string, n: number) {
+  const [y, m] = month.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + n, 1));
+  return d.toISOString().slice(0, 7);
+}
+
 function cleanDescription(d: string) {
   // "Compra no débito|LOJA X" -> "LOJA X"; "Transferência enviada pelo Pix|Fulano" -> "Fulano"
   const parts = d.split("|").map((p) => p.trim()).filter(Boolean);
@@ -147,6 +153,8 @@ export function normalizeTransaction(
   const cc = t.credit_card_data ?? null;
   const installmentTotal = num(cc?.number_of_installments);
   const installmentNumber = num(cc?.installment_identifier);
+  const forecast: string | null =
+    typeof cc?.bill_forecast_date === "string" ? cc.bill_forecast_date.slice(0, 7) : null;
   // Para compras em moeda estrangeira o valor em reais fica em local_currency_amount.
   const amount =
     t.currency && t.currency !== "BRL" && num(t.local_currency_amount)
@@ -176,6 +184,18 @@ export function normalizeTransaction(
     accountingDate &&
     accountingDate > periodEnd
   ) {
+    internal = true;
+    internalReason = "Parcela futura (entra em outra fatura)";
+  } else if (
+    installmentTotal &&
+    installmentTotal > 1 &&
+    (installmentNumber ?? 1) > 1 &&
+    forecast &&
+    date &&
+    forecast > addMonths(date.slice(0, 7), 1)
+  ) {
+    // O banco manda cada parcela como um lançamento com a data da compra.
+    // As que caem em faturas além da próxima não são gasto deste período.
     internal = true;
     internalReason = "Parcela futura (entra em outra fatura)";
   }
@@ -210,6 +230,7 @@ export function normalizeTransaction(
           dueDate: cc.bill_due_date ?? null,
           amount: num(cc.bill_amount),
           name: cc.bill_name ?? null,
+          forecast: forecast,
         }
       : null,
     internal,

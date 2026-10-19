@@ -17,6 +17,7 @@ const CHECKING = "demo-checking";
 const CARD = "demo-card";
 const LOAN = "demo-loan";
 const INSTITUTION = { name: "ofexemplo_br_retail", display_name: "Banco Exemplo" };
+const INSTITUTION_2 = { name: "offinanceira_br_retail", display_name: "Financeira Exemplo" };
 
 export function demoAccounts(): Raw[] {
   return [
@@ -42,7 +43,7 @@ export function demoAccounts(): Raw[] {
       credit_data: {
         credit_limit: 12000,
         minimum_payment: 631.55,
-        cutting_date: null,
+        cutting_date: null, // vencimento vem das faturas
         network: "VISA",
         cards: [{ identification_number: "1234" }],
         limits: [
@@ -58,7 +59,7 @@ export function demoAccounts(): Raw[] {
     {
       account_id: LOAN,
       link: "demo-link",
-      institution: INSTITUTION,
+      institution: INSTITUTION_2,
       category: "LOAN_ACCOUNT",
       name: "Crédito pessoal",
       currency: "BRL",
@@ -173,12 +174,48 @@ export function demoTransactions(today = new Date()): Raw[] {
       }
     }
 
-    // Pagamento da fatura do cartão (movimentação interna)
-    const billDay = new Date(monthStart.getFullYear(), monthStart.getMonth(), 16);
-    if (billDay <= today) {
-      const value = Math.round((2400 + rand() * 900) * 100) / 100;
-      push({ account_id: CHECKING, date: iso(billDay), amount: value, type: "OUTFLOW", description: "Pagamento de fatura", category: "Credits & Loans", subcategory: "Credit Card", operation_type: "OUTROS" });
-      push({ account_id: CARD, date: iso(billDay), amount: value, type: "INFLOW", description: "Pagamento recebido", category: "Credits & Loans", subcategory: "Credit Card", operation_type: "PAGAMENTO_FATURA" });
+  }
+
+  // Compra parcelada em 3x: o banco manda uma linha por parcela, com a data da compra
+  const parcelDate = new Date(today);
+  parcelDate.setDate(parcelDate.getDate() - 12);
+  for (let i = 1; i <= 3; i++) {
+    push({ account_id: CARD, date: iso(parcelDate), amount: 399.9, type: "OUTFLOW", description: "Loja de Eletrônicos", merchant: { merchant_name: "Loja de Eletrônicos" }, category: "Personal Shopping", subcategory: "Electronics", operation_type: "PAGAMENTO", credit_card_data: { installment_identifier: i, number_of_installments: 3, _offset: i - 1 } });
+  }
+
+  // Faturas do cartão: fecha dia 9, vence dia 16
+  const CLOSE = 9;
+  const DUE = 16;
+  const monthKey = (d: Date) => d.toISOString().slice(0, 7);
+  const shift = (month: string, n: number) => {
+    const [y, m] = month.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1 + n, 1)).toISOString().slice(0, 7);
+  };
+  const totals = new Map<string, number>();
+  for (const t of out) {
+    if (t.account_id !== CARD) continue;
+    const d = new Date(`${t.date}T12:00:00Z`);
+    const base = d.getUTCDate() <= CLOSE ? monthKey(d) : shift(monthKey(d), 1);
+    const forecast = shift(base, t.credit_card_data?._offset ?? 0);
+    t.credit_card_data = { ...(t.credit_card_data ?? {}), card_number: "1234", bill_forecast_date: forecast };
+    delete t.credit_card_data._offset;
+    totals.set(forecast, (totals.get(forecast) ?? 0) + t.amount);
+  }
+  const todayIso = iso(today);
+  for (const [month, total] of totals) {
+    const closing = `${month}-0${CLOSE}`;
+    if (closing > todayIso) continue; // fatura ainda aberta
+    const due = `${month}-${DUE}`;
+    const amount = Math.round(total * 100) / 100;
+    for (const t of out) {
+      if (t.account_id === CARD && t.credit_card_data?.bill_forecast_date === month) {
+        Object.assign(t.credit_card_data, { bill_due_date: due, bill_amount: amount, bill_name: month });
+        t.accounting_date = t.date;
+      }
+    }
+    if (due <= todayIso) {
+      push({ account_id: CHECKING, date: due, amount, type: "OUTFLOW", description: "Pagamento de fatura", category: "Credits & Loans", subcategory: "Credit Card", operation_type: "OUTROS" });
+      push({ account_id: CARD, date: due, amount, type: "INFLOW", description: "Pagamento recebido", category: "Credits & Loans", subcategory: "Credit Card", operation_type: "PAGAMENTO_FATURA" });
     }
   }
 

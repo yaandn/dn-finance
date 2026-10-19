@@ -14,6 +14,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { analyze } from "@/lib/finance/analyze";
 import { getSnapshot, resolvePeriod } from "@/lib/finance/data";
+import { filterByBank } from "@/lib/finance/filter";
 import { longDate, money, percent } from "@/lib/format";
 import type { Account } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
@@ -25,7 +26,7 @@ export default async function AccountsPage({ searchParams }: PageProps<"/contas"
   await connection();
   const sp = await searchParams;
   const period = resolvePeriod(Number(sp.dias ?? 30));
-  const snapshot = await getSnapshot(period.days);
+  const snapshot = filterByBank(await getSnapshot(period.days), sp.banco);
   const a = analyze(snapshot, period);
   const netWorth = a.cashBalance - a.cardDebt - a.loanDebt;
 

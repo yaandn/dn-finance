@@ -27,6 +27,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { analyze, type Alert } from "@/lib/finance/analyze";
 import { getSnapshot, resolvePeriod } from "@/lib/finance/data";
+import { filterByBank } from "@/lib/finance/filter";
 import { money, percent, longDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -37,7 +38,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/">) {
   await connection();
   const sp = await searchParams;
   const period = resolvePeriod(Number(sp.dias ?? 30));
-  const snapshot = await getSnapshot(period.days);
+  const snapshot = filterByBank(await getSnapshot(period.days), sp.banco);
   const a = analyze(snapshot, period);
   const query = `?dias=${period.days}`;
 

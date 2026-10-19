@@ -72,13 +72,19 @@ export type Transaction = {
   operationType: string | null;
   installment: { number: number; total: number } | null;
   cardNumber: string | null;
-  bill: { dueDate: string | null; amount: number | null; name: string | null } | null;
+  bill: {
+    dueDate: string | null;
+    amount: number | null;
+    name: string | null;
+    /** Mês da fatura em que o lançamento cai (YYYY-MM), informado pelo banco. */
+    forecast: string | null;
+  } | null;
   /** Movimentações que não são gasto nem renda reais (pagamento da própria fatura etc.). */
   internal: boolean;
   internalReason: string | null;
 };
 
-export type DataSource = "belvo" | "file" | "demo";
+export type DataSource = "mcp" | "belvo" | "file" | "demo";
 
 export type FinanceSnapshot = {
   source: DataSource;
@@ -88,6 +94,15 @@ export type FinanceSnapshot = {
   transactions: Transaction[];
   fetchedAt: string;
   warnings: string[];
+  /** Há uma sessão do Belvo Panorama (MCP) salva neste computador. */
+  mcpConnected: boolean;
+  /** Quando cada banco foi sincronizado pela última vez (só na fonte MCP). */
+  connections?: {
+    connectionId: string;
+    institution: string;
+    status: string;
+    lastSyncedAt: string | null;
+  }[];
 };
 
 export type Period = { from: string; to: string; days: number };
