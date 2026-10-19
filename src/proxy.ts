@@ -3,6 +3,8 @@ import { NextResponse, type NextRequest } from "next/server";
 
 // Renova a sessão do Supabase a cada requisição e manda para /login quem não
 // estiver logado. As rotas e Server Actions conferem o usuário de novo.
+const GUEST_PAGES = new Set(["/login", "/cadastro", "/esqueci-senha"]);
+
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
 
@@ -33,9 +35,11 @@ export async function proxy(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
   const loggedIn = Boolean(data?.claims?.sub);
   const { pathname } = request.nextUrl;
-  const isLogin = pathname === "/login";
+  // Telas de quem ainda não entrou: quem já está logado vai para o painel
+  const isGuestPage = GUEST_PAGES.has(pathname);
+  const isPublic = isGuestPage || pathname === "/auth/confirm";
 
-  if (!loggedIn && !isLogin) {
+  if (!loggedIn && !isPublic) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Faça login para continuar." }, { status: 401 });
     }
@@ -44,7 +48,7 @@ export async function proxy(request: NextRequest) {
     url.search = "";
     return NextResponse.redirect(url);
   }
-  if (loggedIn && isLogin) {
+  if (loggedIn && isGuestPage) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     url.search = "";

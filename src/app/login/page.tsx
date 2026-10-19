@@ -1,33 +1,29 @@
 import type { Metadata } from "next";
-import { WalletIcon } from "lucide-react";
+import Link from "next/link";
+import { Suspense } from "react";
 
-import { LoginForm } from "@/components/login-form";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AuthCard } from "@/components/auth-card";
+import { LoginForm } from "@/components/auth-forms";
 
 export const metadata: Metadata = { title: "Entrar · Minhas Finanças" };
 
 export default function LoginPage() {
   return (
-    <main className="flex min-h-svh items-center justify-center px-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <WalletIcon className="size-5" /> Minhas Finanças
-          </CardTitle>
-          <CardDescription>
-            Entre com o e-mail e a senha que você recebeu.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <LoginForm />
-        </CardContent>
-      </Card>
-    </main>
+    <AuthCard
+      title="Entrar"
+      description="Use o e-mail e a senha da sua conta."
+      footer={
+        <p>
+          Não tem conta?{" "}
+          <Link href="/cadastro" className="text-foreground font-medium underline-offset-4 hover:underline">
+            Criar conta
+          </Link>
+        </p>
+      }
+    >
+      <Suspense>
+        <LoginForm />
+      </Suspense>
+    </AuthCard>
   );
 }
