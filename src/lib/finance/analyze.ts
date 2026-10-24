@@ -1,11 +1,10 @@
-import { GAMBLING, OTHER_BANK_BILLS, looksLikeSubscription } from "@/lib/finance/categories";
+import { GAMBLING, OTHER_BANK_BILLS } from "@/lib/finance/categories";
 import { buildBills } from "@/lib/finance/bills";
 import type { Account, FinanceSnapshot, Period, Transaction } from "@/lib/finance/types";
 
 export type CategoryTotal = { category: string; total: number; count: number; share: number };
 export type DailyPoint = { date: string; entradas: number; saidas: number; saldo: number };
 export type CounterpartTotal = { name: string; total: number; count: number; logo: string | null };
-export type Subscription = { name: string; amount: number; lastDate: string; logo: string | null };
 export type Alert = { level: "danger" | "warning" | "info"; title: string; detail: string };
 
 export type Analysis = {
@@ -22,8 +21,6 @@ export type Analysis = {
   daily: DailyPoint[];
   topCounterparts: CounterpartTotal[];
   topIncomeSources: CounterpartTotal[];
-  subscriptions: Subscription[];
-  subscriptionsMonthly: number;
   cards: Account[];
   loans: Account[];
   cashAccounts: Account[];
@@ -86,35 +83,6 @@ export function analyze(snapshot: FinanceSnapshot, period: Period): Analysis {
       .map(([name, v]) => ({ name, total: round(v.total), count: v.count, logo: v.logo }))
       .sort((a, b) => b.total - a.total)
       .slice(0, 8);
-
-  // Assinaturas: agrupa por estabelecimento e usa o valor mais recente
-  const subsMap = new Map<string, Subscription>();
-  for (const t of outflows) {
-    if (!looksLikeSubscription(t)) continue;
-    if (t.installment && t.installment.total > 1) {
-      // Assinatura parcelada (ex.: plano anual em 12x): conta a parcela uma vez
-      const name = t.counterpart.replace(/\s*\d+\/\d+$/, "");
-      if (!subsMap.has(name)) {
-        subsMap.set(name, { name, amount: t.amount, lastDate: t.date, logo: t.merchantLogo });
-      }
-      continue;
-    }
-    const name = t.merchant ?? t.counterpart;
-    const cur = subsMap.get(name);
-    if (!cur || t.date > cur.lastDate) {
-      subsMap.set(name, {
-        name,
-        amount: cur && cur.lastDate.slice(0, 7) === t.date.slice(0, 7) ? cur.amount + t.amount : t.amount,
-        lastDate: t.date,
-        logo: t.merchantLogo,
-      });
-    } else if (cur.lastDate.slice(0, 7) === t.date.slice(0, 7)) {
-      cur.amount += t.amount;
-    }
-  }
-  const subscriptions = [...subsMap.values()]
-    .map((s) => ({ ...s, amount: round(s.amount) }))
-    .sort((a, b) => b.amount - a.amount);
 
   const cards = snapshot.accounts.filter((a) => a.category === "CREDIT_CARD");
   const loans = snapshot.accounts.filter(
@@ -212,8 +180,6 @@ export function analyze(snapshot: FinanceSnapshot, period: Period): Analysis {
     daily,
     topCounterparts: counterparts(outflows),
     topIncomeSources: counterparts(inflows),
-    subscriptions,
-    subscriptionsMonthly: round(subscriptions.reduce((s, x) => s + x.amount, 0)),
     cards,
     loans,
     cashAccounts,

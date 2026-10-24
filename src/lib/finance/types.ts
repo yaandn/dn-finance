@@ -1,3 +1,5 @@
+import type { Recurring } from "@/lib/finance/recurring";
+
 // Modelo normalizado usado pela interface. Qualquer fonte de dados
 // (API Belvo, arquivo exportado ou modo demonstração) é convertida para cá.
 
@@ -109,6 +111,15 @@ export type Period = { from: string; to: string; days: number };
 
 /** Resposta de /api/snapshot: os dados e o período que o servidor usou. */
 export type SnapshotResponse = FinanceSnapshot & { period: Period };
+
+/** Resposta de /api/recorrentes: gastos recorrentes detectados em cerca de um ano. */
+export type RecurringResponse = {
+  from: string;
+  to: string;
+  source: DataSource;
+  fetchedAt: string;
+  items: Recurring[];
+};
 
 /** Resposta de /api/installments: parcelas de compras feitas entre `since` e `before`. */
 export type CardInstallmentsResponse = {

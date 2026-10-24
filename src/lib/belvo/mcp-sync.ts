@@ -4,6 +4,7 @@ import { detachUser, type CurrentUser } from "@/lib/auth";
 import {
   callJson,
   clearMcpCache,
+  friendlyMcpError,
   toConnectionSync,
   withClient,
   type ConnectionSync,
@@ -28,6 +29,14 @@ export type RefreshResult = {
   retryAfter: string | null;
 };
 
+/** Uma ida da Belvo a um banco (refresh_connection). */
+export type SyncAttempt = {
+  institution: string;
+  status: RefreshResult["status"];
+  at: string;
+  retryAfter: string | null;
+};
+
 export type SyncState = {
   running: boolean;
   trigger: "manual" | "auto" | null;
@@ -36,6 +45,13 @@ export type SyncState = {
   current: string | null;
   results: RefreshResult[];
   lastAutoAt: string | null;
+  /**
+   * Tentativas dos últimos meses. A Belvo não diz quantas atualizações
+   * restam (só recusa com "skipped" quando o limite estoura), então o app conta.
+   */
+  history: SyncAttempt[];
+  /** Desde quando o histórico é registrado. */
+  historySince: string | null;
 };
 
 const REFRESH_TIMEOUT_MS = 10 * 60 * 1000;
@@ -52,7 +68,12 @@ const EMPTY: SyncState = {
   current: null,
   results: [],
   lastAutoAt: null,
+  history: [],
+  historySince: null,
 };
+
+/** Quanto do histórico guardar. */
+const HISTORY_DAYS = 62;
 
 // Estado em memória por usuário (sobrevive ao recarregamento de módulos em dev);
 // o banco guarda a última execução para quando o servidor reinicia.
@@ -115,6 +136,7 @@ async function run(user: CurrentUser, trigger: "manual" | "auto") {
     current: null,
     results: [],
     lastAutoAt: trigger === "auto" ? startedAt : state.lastAutoAt,
+    historySince: state.historySince ?? startedAt,
   };
   await save(user, state);
 
@@ -145,7 +167,7 @@ async function run(user: CurrentUser, trigger: "manual" | "auto") {
           results.push({
             institution: conn.institution,
             status: "error",
-            message: err instanceof Error ? err.message : String(err),
+            message: friendlyMcpError(err),
             refreshedAt: null,
             retryAfter: null,
           });
@@ -156,20 +178,32 @@ async function run(user: CurrentUser, trigger: "manual" | "auto") {
     results.push({
       institution: "Belvo Panorama",
       status: "error",
-      message: err instanceof Error ? err.message : String(err),
+      message: friendlyMcpError(err),
       refreshedAt: null,
       retryAfter: null,
     });
   } finally {
+    const cutoff = Date.now() - HISTORY_DAYS * 86_400_000;
+    const finishedAt = new Date().toISOString();
+    const attempts: SyncAttempt[] = results.map((r) => ({
+      institution: r.institution,
+      status: r.status,
+      at: r.refreshedAt ?? finishedAt,
+      retryAfter: r.retryAfter,
+    }));
     clearMcpCache(user.id);
     // Dados novos da Belvo: as parcelas antigas são buscadas de novo
     await deleteDoc(user, "card_history").catch(() => {});
+    await deleteDoc(user, "recurring_cache").catch(() => {});
     await save(user, {
       ...states.get(user.id)!,
       running: false,
       current: null,
-      finishedAt: new Date().toISOString(),
+      finishedAt,
       results,
+      history: [...(states.get(user.id)!.history ?? []), ...attempts].filter(
+        (a) => Date.parse(a.at) >= cutoff,
+      ),
     });
   }
 }

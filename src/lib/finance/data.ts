@@ -19,16 +19,20 @@ import {
   McpAuthError,
   fetchCardInstallmentsFromMcp,
   fetchFromMcp,
+  friendlyMcpError,
+  onMcpCacheClear,
 } from "@/lib/belvo/mcp-client";
 import { normalizeAccount, normalizeTransaction } from "@/lib/belvo/normalize";
 import { readDoc, writeDoc } from "@/lib/user-documents";
-import { resolvePeriod } from "@/lib/finance/period";
+import { MAX_RANGE_DAYS, resolvePeriod, resolveRange } from "@/lib/finance/period";
+import { detectRecurring } from "@/lib/finance/recurring";
 import type {
   Account,
   CardInstallmentsResponse,
   DataSource,
   FinanceSnapshot,
   Period,
+  RecurringResponse,
   SnapshotResponse,
 } from "@/lib/finance/types";
 
@@ -170,6 +174,70 @@ export async function getCardInstallments(
   return result;
 }
 
+/** Mesma validade do cache das parcelas; a sincronização também apaga este. */
+const RECURRING_CACHE_MS = INSTALLMENT_CACHE_MS;
+
+/**
+ * Gastos recorrentes de cerca de um ano. Na fonte MCP o resultado (pequeno)
+ * fica salvo em user_documents, porque buscar um ano na Belvo é demorado.
+ */
+/**
+ * Último resultado por usuário nesta instância do servidor. Serve quando a
+ * migration do recurring_cache ainda não foi aplicada (só no próprio servidor).
+ */
+const recurringMemory = new Map<string, RecurringResponse>();
+// A sincronização e o desconectar limpam o cache do MCP: este vai junto
+onMcpCacheClear((userId) => recurringMemory.delete(userId));
+
+const fresh = (r: RecurringResponse | null | undefined): r is RecurringResponse =>
+  !!r && Date.now() - Date.parse(r.fetchedAt) < RECURRING_CACHE_MS;
+
+/**
+ * Só o que já foi calculado, sem ir à Belvo (null se não houver). O card do
+ * Painel usa isto: buscar um ano a cada visita estoura o limite da Belvo.
+ */
+export async function getCachedRecurring(
+  user: CurrentUser,
+): Promise<RecurringResponse | null> {
+  const memory = recurringMemory.get(user.id);
+  if (fresh(memory)) return memory;
+  const saved = await readDoc<RecurringResponse>(user, "recurring_cache").catch(() => null);
+  return fresh(saved) ? saved : null;
+}
+
+export async function getRecurring(user: CurrentUser): Promise<RecurringResponse> {
+  const today = new Date().toISOString().slice(0, 10);
+  const period = resolveRange(shiftDays(today, -(MAX_RANGE_DAYS - 1)), today)!;
+  const mcp = pickSource(await hasMcpSession(user)) === "mcp";
+
+  if (mcp) {
+    const cached = await getCachedRecurring(user);
+    if (cached) return cached;
+  }
+
+  const snapshot = await load(user, period);
+  // Se a Belvo falhou, o load devolve a demonstração: aqui isso viraria uma
+  // lista de assinaturas inventada, então é melhor mostrar o erro
+  if (mcp && snapshot.source !== "mcp") {
+    throw new Error(
+      snapshot.warnings[0]?.replace(/ Mostrando dados de demonstração\.$/, "") ??
+        "Não foi possível ler os lançamentos na Belvo.",
+    );
+  }
+  const result: RecurringResponse = {
+    from: period.from,
+    to: period.to,
+    source: snapshot.source,
+    fetchedAt: new Date().toISOString(),
+    items: detectRecurring(snapshot.transactions, today),
+  };
+  if (mcp) {
+    recurringMemory.set(user.id, result);
+    await writeDoc(user, "recurring_cache", result).catch(() => {});
+  }
+  return result;
+}
+
 async function load(
   user: CurrentUser,
   period: Period,
@@ -192,7 +260,7 @@ async function load(
             ],
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = friendlyMcpError(err);
       return build("demo", demoAccounts(), demoTransactions(), period, {
         mcpConnected: !(err instanceof McpAuthError),
         warnings: [

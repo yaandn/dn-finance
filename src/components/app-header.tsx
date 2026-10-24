@@ -25,6 +25,7 @@ const NAV = [
   { href: "/", label: "Painel" },
   { href: "/transacoes", label: "Transações" },
   { href: "/faturas", label: "Faturas" },
+  { href: "/recorrentes", label: "Recorrentes" },
   { href: "/planejamento", label: "Planejamento" },
   { href: "/contas", label: "Contas e dívidas" },
 ];
@@ -77,10 +78,10 @@ export function AppHeader({
 
   return (
     <header className="bg-background/80 sticky top-0 z-40 border-b backdrop-blur">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 sm:h-14 sm:flex-nowrap sm:py-0">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-1 px-4 pt-2">
         <Link
           href={`/${query}`}
-          className="flex items-center gap-2 font-semibold"
+          className="flex items-center gap-2 font-semibold whitespace-nowrap"
         >
           <span className="bg-primary text-primary-foreground grid size-7 place-items-center rounded-lg">
             <WalletIcon className="size-4" />
@@ -88,7 +89,8 @@ export function AppHeader({
           <span>Minhas Finanças</span>
         </Link>
 
-        <nav className="order-last -mx-1 flex w-full items-center gap-1 overflow-x-auto sm:order-none sm:mx-0 sm:w-auto">
+        {/* Linha própria: seis abas não cabem ao lado dos filtros */}
+        <nav className="order-last -mx-1 flex w-full items-center gap-1 overflow-x-auto pb-1.5">
           {NAV.map((item) => {
             const active =
               item.href === "/"

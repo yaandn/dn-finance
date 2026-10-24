@@ -64,14 +64,13 @@ export function DateRangePicker({
   }
 
   return (
-    <div className={cn("flex items-center", className)}>
+    <div className={cn("flex flex-1 items-center sm:flex-none", className)}>
       <Popover open={open} onOpenChange={openChange}>
         <PopoverTrigger asChild>
           <Button
             variant="outline"
-            size="sm"
             className={cn(
-              "justify-start font-normal tabular-nums",
+              "flex-1 justify-start font-normal tabular-nums",
               custom && "rounded-r-none border-r-0",
             )}
           >
@@ -109,8 +108,7 @@ export function DateRangePicker({
       {custom && (
         <Button
           variant="outline"
-          size="sm"
-          className="rounded-l-none px-2"
+          className="rounded-l-none px-2.5"
           aria-label="Voltar ao período padrão"
           title="Voltar ao período padrão"
           onClick={() => onChange(null)}

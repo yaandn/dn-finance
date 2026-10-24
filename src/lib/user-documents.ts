@@ -11,7 +11,9 @@ export type DocKind =
   | "sync"
   | "widget"
   /** Cache das parcelas de compras antigas (a busca leva até um minuto). */
-  | "card_history";
+  | "card_history"
+  /** Gastos recorrentes detectados em um ano de lançamentos. */
+  | "recurring_cache";
 
 type DocUser = Pick<CurrentUser, "id" | "supabase">;
 
