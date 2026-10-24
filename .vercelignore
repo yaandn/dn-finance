@@ -3,3 +3,4 @@
 .data
 data/*.json
 !data/belvo-export.example.json
+mac-widget

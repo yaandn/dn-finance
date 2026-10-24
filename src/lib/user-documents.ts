@@ -5,7 +5,13 @@ import type { CurrentUser } from "@/lib/auth";
 // Um documento JSON por (usuário, tipo) na tabela public.user_documents.
 // O RLS garante que cada sessão só enxerga as próprias linhas.
 
-export type DocKind = "belvo_mcp" | "plan" | "sync" | "widget";
+export type DocKind =
+  | "belvo_mcp"
+  | "plan"
+  | "sync"
+  | "widget"
+  /** Cache das parcelas de compras antigas (a busca leva até um minuto). */
+  | "card_history";
 
 type DocUser = Pick<CurrentUser, "id" | "supabase">;
 

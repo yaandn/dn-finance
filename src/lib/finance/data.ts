@@ -21,6 +21,7 @@ import {
   fetchFromMcp,
 } from "@/lib/belvo/mcp-client";
 import { normalizeAccount, normalizeTransaction } from "@/lib/belvo/normalize";
+import { readDoc, writeDoc } from "@/lib/user-documents";
 import { resolvePeriod } from "@/lib/finance/period";
 import type {
   Account,
@@ -101,6 +102,13 @@ export async function getSnapshot(
 
 /** Quantos meses antes da janela de 90 dias procurar compras parceladas. */
 const INSTALLMENT_HISTORY_MONTHS = 13;
+/**
+ * Validade do cache das parcelas antigas. Fica no banco (user_documents,
+ * tipo card_history) e não só na memória: na Vercel cada execução pode cair
+ * em outra instância. A sincronização e o desconectar apagam o cache.
+ */
+const INSTALLMENT_CACHE_MS = 12 * 60 * 60 * 1000;
+type CardHistoryDoc = CardInstallmentsResponse & { fetchedAt: string };
 
 const shiftDays = (iso: string, days: number) => {
   const d = new Date(`${iso}T12:00:00Z`);
@@ -128,6 +136,17 @@ export async function getCardInstallments(
   // As outras fontes não têm histórico além do período carregado
   if (pickSource(await hasMcpSession(user)) !== "mcp") return empty;
 
+  const saved = await readDoc<CardHistoryDoc>(user, "card_history").catch(
+    () => null,
+  );
+  if (saved && Date.now() - Date.parse(saved.fetchedAt) < INSTALLMENT_CACHE_MS) {
+    return {
+      since: saved.since,
+      before: saved.before,
+      transactions: saved.transactions,
+    };
+  }
+
   const data = await fetchCardInstallmentsFromMcp(
     user,
     since,
@@ -136,13 +155,19 @@ export async function getCardInstallments(
   );
   const accounts = data.accounts.map(normalizeAccount);
   const byId = new Map<string, Account>(accounts.map((a) => [a.id, a]));
-  return {
+  const result: CardInstallmentsResponse = {
     since,
     before,
     transactions: data.transactions.map((t) =>
       normalizeTransaction(t, byId, window.to),
     ),
   };
+  // Sem a migration do card_history o cache fica só na memória do servidor
+  await writeDoc(user, "card_history", {
+    ...result,
+    fetchedAt: new Date().toISOString(),
+  } satisfies CardHistoryDoc).catch(() => {});
+  return result;
 }
 
 async function load(
