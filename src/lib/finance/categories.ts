@@ -23,7 +23,8 @@ export const CATEGORY_LABELS: Record<string, string> = {
 export const OTHER_BANK_BILLS = "Faturas de outros bancos";
 export const GAMBLING = "Apostas";
 
-const CARD_BILL_PATTERN = /(MASTERCARD|VISA|ELO|HIPERCARD|AMEX|BANCO CSF|CARTAO|CARTÃO)/i;
+// Palavras inteiras: sem \b, "ELO" casava com "pelo" em "Transferência enviada pelo Pix"
+const CARD_BILL_PATTERN = /\b(MASTERCARD|VISA|ELO|HIPERCARD|AMEX|BANCO CSF|CARTAO|CARTÃO)\b/i;
 
 export function categorize(input: {
   rawCategory: string | null;
@@ -64,13 +65,17 @@ export const SUBSCRIPTION_SUBCATEGORIES = new Set([
 ]);
 
 const SUBSCRIPTION_NAMES =
-  /(netflix|spotify|disney|globo|apple\.com|youtube|prime video|amazon prime|hbo|max|deezer|cursor|chatgpt|openai|anthropic|claude|github|aws|google one|icloud|canva|notion)/i;
+  /(netflix|spotify|disney|globo|apple|ifood club|uber one|meli\+|youtube|prime video|amazon prime|hbo|\bmax\b|deezer|cursor|chatgpt|openai|anthropic|claude|github|aws|google one|icloud|canva|notion)/i;
+
+const NOT_SUBSCRIPTION_NAMES = /(cinemark|cinepolis|kinoplex|\buci\b|ingresso\.com)/i;
 
 export function looksLikeSubscription(t: {
   subcategory: string | null;
   description: string;
   merchant: string | null;
 }) {
+  // Ingresso de cinema cai em "Movie & Video", mas não é assinatura
+  if (NOT_SUBSCRIPTION_NAMES.test(`${t.merchant ?? ""} ${t.description}`)) return false;
   if (t.subcategory && SUBSCRIPTION_SUBCATEGORIES.has(t.subcategory)) return true;
   return SUBSCRIPTION_NAMES.test(`${t.merchant ?? ""} ${t.description}`);
 }

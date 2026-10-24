@@ -48,12 +48,49 @@ function cachedCovering(userId: string, from: string, to: string) {
 const HISTORY_TTL_MS = 12 * 60 * 60 * 1000;
 const historyCache = new Map<string, { at: number; data: CardHistory }>();
 
+/** Caches derivados dos dados da Belvo (ex.: recorrentes) que somem junto. */
+const clearListeners: ((userId: string) => void)[] = [];
+export function onMcpCacheClear(listener: (userId: string) => void) {
+  clearListeners.push(listener);
+}
+
 export function clearMcpCache(userId: string) {
   for (const map of [cache, historyCache]) {
     for (const key of map.keys()) {
       if (key.startsWith(`${userId}:`)) map.delete(key);
     }
   }
+  for (const listener of clearListeners) listener(userId);
+}
+
+/** Limite de requisições da Belvo (Cloudflare 1015 ou HTTP 429). */
+const RATE_LIMITED = /\b(1015|429)\b|rate.?limit|too many requests/i;
+/** A Belvo pede no mínimo 30 s antes de tentar de novo. */
+const MIN_RATE_LIMIT_WAIT_MS = 30_000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Quando a Belvo limita as requisições, espera o retry_after (mínimo 30 s) e
+ * tenta uma única vez mais. Insistir só prolonga o bloqueio.
+ */
+async function retryOnRateLimit<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!RATE_LIMITED.test(msg)) throw err;
+    const retryAfter = Number(msg.match(/"retry_after"\s*:\s*(\d+)/)?.[1] ?? 0) * 1000;
+    await sleep(Math.max(retryAfter, MIN_RATE_LIMIT_WAIT_MS));
+    return fn();
+  }
+}
+
+/** Mensagem para a tela: o erro da Cloudflare vem como um JSON enorme. */
+export function friendlyMcpError(err: unknown) {
+  const msg = err instanceof Error ? err.message : String(err);
+  return RATE_LIMITED.test(msg)
+    ? "A Belvo limitou as requisições por alguns minutos. Tente de novo daqui a pouco."
+    : msg;
 }
 
 export async function withClient<T>(
@@ -61,16 +98,23 @@ export async function withClient<T>(
   fn: (client: Client) => Promise<T>,
 ): Promise<T> {
   const provider = await providerFor(user);
-  const transport = new StreamableHTTPClientTransport(new URL(BELVO_MCP_URL), {
-    authProvider: provider,
-  });
-  const client = new Client({ name: "dn-finance", version: "0.1.0" });
-  try {
+  const connect = async () => {
+    const transport = new StreamableHTTPClientTransport(new URL(BELVO_MCP_URL), {
+      authProvider: provider,
+    });
+    const client = new Client({ name: "dn-finance", version: "0.1.0" });
     await client.connect(transport);
+    return client;
+  };
+  let client: Client;
+  try {
+    // O limite de requisições também barra a conexão, não só as chamadas
+    client = await retryOnRateLimit(connect);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (RATE_LIMITED.test(msg)) throw new Error(friendlyMcpError(err));
     if (
-      /unauthori[sz]ed|401|invalid_grant|invalid_token/i.test(msg) ||
+      /unauthori[sz]ed|\b401\b|invalid_grant|invalid_token/i.test(msg) ||
       provider.authorizationUrl
     ) {
       throw new McpAuthError(
@@ -94,12 +138,14 @@ export async function callJson(
   /** Tempo máximo da chamada em ms (o padrão do SDK é 60 s). */
   timeout?: number,
 ): Promise<Raw> {
-  const result = await client.callTool(
-    { name, arguments: args },
-    undefined,
-    timeout
-      ? { timeout, maxTotalTimeout: timeout, resetTimeoutOnProgress: true }
-      : undefined,
+  const result = await retryOnRateLimit(() =>
+    client.callTool(
+      { name, arguments: args },
+      undefined,
+      timeout
+        ? { timeout, maxTotalTimeout: timeout, resetTimeoutOnProgress: true }
+        : undefined,
+    ),
   );
   const text = (result.content as { type: string; text?: string }[] | undefined)
     ?.filter((c) => c.type === "text")
@@ -117,22 +163,38 @@ export async function callJson(
 /**
  * Percorre todas as páginas de uma ferramenta paginada por cursor.
  * Se o servidor disser que a página ficou grande demais, reduz o page_size
- * para o valor sugerido e recomeça (sem duplicar itens).
+ * para o valor sugerido e recomeça (o cursor é o número da página, então não
+ * dá para continuar com outro tamanho).
+ *
+ * Vai até o fim do cursor. Antes havia um limite de 40 páginas: com o page_size
+ * reduzido para ~17, um ano (1.600 lançamentos) vinha cortado em ~670, e como a
+ * Belvo ordena pelo id da transação, sumiam lançamentos de todos os meses.
  */
+const MAX_PAGES = 500;
+/**
+ * Último page_size aceito por ferramenta. Lançamentos costumam passar do
+ * limite de tamanho com 50 por página; lembrar evita repetir a tentativa
+ * que falha (cada chamada conta para o limite de requisições da Belvo).
+ */
+const acceptedPageSize = new Map<string, number>();
+
 async function listAll(
   client: Client,
   name: string,
   args: Raw,
   /** Máximo aceito pelo servidor: menos idas e voltas por listagem. */
   pageSize = 50,
-  maxPages = 40,
 ) {
-  let size = pageSize;
+  let size = Math.min(pageSize, acceptedPageSize.get(name) ?? pageSize);
   for (let attempt = 0; attempt < 4; attempt++) {
     const items: Raw[] = [];
     let cursor: string | null | undefined;
     try {
-      for (let page = 0; page < maxPages; page++) {
+      for (let page = 0; ; page++) {
+        // Trava contra um cursor que nunca acaba: melhor falhar que cortar dados
+        if (page >= MAX_PAGES) {
+          throw new Error(`${name} passou de ${MAX_PAGES} páginas; a listagem ficaria incompleta.`);
+        }
         const res = await callJson(client, name, {
           ...args,
           page_size: size,
@@ -140,9 +202,12 @@ async function listAll(
         });
         items.push(...(res.items ?? []));
         cursor = res.next_cursor;
-        if (!cursor) break;
+        if (!cursor) {
+          // Só guarda reduções: uma listagem pequena não prova que 50 cabe
+          if (size < pageSize) acceptedPageSize.set(name, size);
+          return items;
+        }
       }
-      return items;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const suggested = msg.match(/page_size=(\d+)/);
@@ -197,7 +262,22 @@ export async function fetchFromMcp(
 ): Promise<McpData> {
   const hit = cachedCovering(user.id, from, to);
   if (hit) return hit;
+  // Mesma busca já em andamento (ex.: Painel e Recorrentes abertos juntos): reaproveita
+  const key = `${user.id}:${from}:${to}`;
+  const running = inflight.get(key);
+  if (running) return running;
+  const promise = loadFromMcp(user, from, to).finally(() => inflight.delete(key));
+  inflight.set(key, promise);
+  return promise;
+}
 
+const inflight = new Map<string, Promise<McpData>>();
+
+async function loadFromMcp(
+  user: CurrentUser,
+  from: string,
+  to: string,
+): Promise<McpData> {
   const data = await withClient(user, async (client) => {
     const { items, valid, byConnection } = await validConnections(client);
 
@@ -267,8 +347,6 @@ export async function fetchCardInstallmentsFromMcp(
           start_date: since,
           end_date: before,
         },
-        50,
-        120,
       );
       transactions.push(
         ...items.filter((t) => {

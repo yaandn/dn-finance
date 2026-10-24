@@ -27,6 +27,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { useCachedRecurring } from "@/lib/api/queries";
 import { analyze, type Alert } from "@/lib/finance/analyze";
 import { money, percent, longDate } from "@/lib/format";
 import type { Period } from "@/lib/finance/types";
@@ -179,32 +180,8 @@ function Dashboard({
           </CardContent>
         </Card>
 
-        {/* Assinaturas */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <RepeatIcon className="size-4" /> Assinaturas
-            </CardTitle>
-            <CardDescription>
-              ~{money(a.subscriptionsMonthly)} por mês · {money(a.subscriptionsMonthly * 12)} por
-              ano
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {a.subscriptions.length ? (
-              <ul className="divide-y text-sm">
-                {a.subscriptions.map((s) => (
-                  <li key={s.name} className="flex items-center justify-between py-2">
-                    <span className="truncate">{s.name}</span>
-                    <span className="tabular-nums">{money(s.amount)}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <Empty>Nenhuma assinatura identificada.</Empty>
-            )}
-          </CardContent>
-        </Card>
+        {/* Assinaturas e outros recorrentes */}
+        <RecurringCard bank={snapshot.bank} query={query} />
 
         {/* Dívidas */}
         <Card>
@@ -380,4 +357,83 @@ function RankList({
 
 function Empty({ children }: { children: React.ReactNode }) {
   return <p className="text-muted-foreground py-6 text-center text-sm">{children}</p>;
+}
+
+/** Resumo dos gastos recorrentes (detectados em um ano, em /api/recorrentes). */
+function RecurringCard({ bank, query }: { bank: string | null; query: string }) {
+  // Só o que já foi calculado: a análise de um ano fica na página Recorrentes
+  const { data, isPending, error } = useCachedRecurring();
+  const items = (data?.items ?? []).filter(
+    (r) => r.status !== "cancelada" && (!bank || r.institutions.includes(bank)),
+  );
+  const yearly = items.reduce((s, r) => s + r.yearly, 0);
+  const increases = items.filter((r) => r.priceChange).length;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <RepeatIcon className="size-4" /> Recorrentes
+        </CardTitle>
+        <CardDescription>
+          {isPending
+            ? "Carregando…"
+            : data
+              ? `${money(yearly / 12)} por mês · ${money(yearly)} por ano`
+              : "Assinaturas e gastos fixos"}
+        </CardDescription>
+        <CardAction>
+          <Link
+            href={`/recorrentes${query}`}
+            className="text-primary flex items-center text-sm hover:underline"
+          >
+            Ver todas <ChevronRightIcon className="size-4" />
+          </Link>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {isPending ? (
+          <div className="space-y-2.5">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="bg-muted h-5 animate-pulse rounded" />
+            ))}
+          </div>
+        ) : error ? (
+          <Empty>Não foi possível analisar os gastos recorrentes.</Empty>
+        ) : !data ? (
+          <Empty>
+            <Link href={`/recorrentes${query}`} className="text-primary hover:underline">
+              Analisar o último ano
+            </Link>{" "}
+            para ver assinaturas e gastos fixos.
+          </Empty>
+        ) : items.length ? (
+          <>
+            {increases > 0 && (
+              <p className="text-warning mb-2 text-xs">
+                {increases === 1 ? "1 cobrança ficou mais cara" : `${increases} cobranças ficaram mais caras`}
+              </p>
+            )}
+            <ul className="divide-y text-sm">
+              {items.slice(0, 6).map((r) => (
+                <li key={r.id} className="flex items-center justify-between gap-3 py-2">
+                  <span className="truncate">
+                    {r.name}
+                    {r.cadence !== "mensal" && (
+                      <span className="text-muted-foreground text-xs"> · {r.cadence}</span>
+                    )}
+                  </span>
+                  <span className={cn("tabular-nums", r.priceChange && "text-warning")}>
+                    {money(r.amount)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <Empty>Nenhum gasto recorrente identificado.</Empty>
+        )}
+      </CardContent>
+    </Card>
+  );
 }

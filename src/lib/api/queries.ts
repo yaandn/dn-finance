@@ -10,6 +10,7 @@ import type { SyncState } from "@/lib/belvo/mcp-sync";
 import type { PlanSettings } from "@/lib/finance/plan-store";
 import type {
   CardInstallmentsResponse,
+  RecurringResponse,
   SnapshotResponse,
 } from "@/lib/finance/types";
 
@@ -22,6 +23,8 @@ export const queryKeys = {
   snapshotRange: (from: string, to: string) =>
     ["snapshot", "range", from, to] as const,
   installments: ["snapshot", "installments"] as const,
+  recurring: ["snapshot", "recurring"] as const,
+  recurringCached: ["snapshot", "recurring", "cached"] as const,
   sync: ["sync"] as const,
   plan: ["plan"] as const,
   widgetToken: ["widget-token"] as const,
@@ -72,6 +75,37 @@ export function useCardInstallments(enabled = true) {
     enabled,
     // A busca é longa (um ano de lançamentos) e compras antigas não mudam
     staleTime: 60 * 60 * 1000,
+  });
+}
+
+export function useRecurring() {
+  const queryClient = useQueryClient();
+  return useQuery({
+    queryKey: queryKeys.recurring,
+    queryFn: async ({ signal }) => {
+      const data = (await http.get<RecurringResponse>("/recorrentes", { signal })).data;
+      // O card do Painel passa a mostrar o mesmo resultado
+      queryClient.setQueryData(queryKeys.recurringCached, data);
+      return data;
+    },
+    // Um ano de lançamentos: a busca é longa e muda pouco
+    staleTime: 60 * 60 * 1000,
+    // Repetir sozinho dobra as ~100 chamadas à Belvo e piora o limite
+    retry: false,
+  });
+}
+
+/** Só o resultado já calculado (null se ainda não houver); não vai à Belvo. */
+export function useCachedRecurring() {
+  const queryClient = useQueryClient();
+  return useQuery({
+    queryKey: queryKeys.recurringCached,
+    queryFn: async ({ signal }) =>
+      // Se a página Recorrentes já carregou nesta sessão, usa o mesmo resultado
+      queryClient.getQueryData<RecurringResponse>(queryKeys.recurring) ??
+      (await http.get<RecurringResponse | null>("/recorrentes", { params: { cache: 1 }, signal }))
+        .data,
+    staleTime: 5 * 60 * 1000,
   });
 }
 
