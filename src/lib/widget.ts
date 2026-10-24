@@ -1,6 +1,7 @@
 import "server-only";
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { after } from "next/server";
 
 import type { CurrentUser } from "@/lib/auth";
 import { decryptJson, encryptJson } from "@/lib/crypto";
@@ -92,6 +93,8 @@ export async function widgetPlanSummary(
   // As parcelas antigas podem demorar (um ano de lançamentos) na primeira vez:
   // a busca continua em segundo plano e fica no cache para a próxima atualização.
   const installments = getCardInstallments(user).catch(() => null);
+  // Na Vercel, sem isso a busca seria interrompida assim que a resposta sai
+  after(() => installments);
   const [snapshot, { plan: settings, configured }, older] = await Promise.all([
     getSnapshot(user, period),
     readPlan(user),

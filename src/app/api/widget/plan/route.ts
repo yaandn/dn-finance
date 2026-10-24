@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 
 import { userFromWidgetToken, widgetPlanSummary } from "@/lib/widget";
 
+/** A primeira busca das parcelas antigas pagina um ano de lançamentos na Belvo. */
+export const maxDuration = 300;
+
 // Lido pelo widget do Mac com "Authorization: Bearer <token do widget>".
 // Não usa a sessão do navegador: o proxy.ts deixa esta rota passar.
 export async function GET(request: Request) {

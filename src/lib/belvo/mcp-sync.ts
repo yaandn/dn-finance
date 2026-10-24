@@ -8,7 +8,7 @@ import {
   withClient,
   type ConnectionSync,
 } from "@/lib/belvo/mcp-client";
-import { readDoc, writeDoc } from "@/lib/user-documents";
+import { deleteDoc, readDoc, writeDoc } from "@/lib/user-documents";
 
 // Atualização dos dados no Belvo Panorama (refresh_connection).
 // A Belvo vai até o banco buscar dados novos; pode levar alguns minutos por banco,
@@ -162,6 +162,8 @@ async function run(user: CurrentUser, trigger: "manual" | "auto") {
     });
   } finally {
     clearMcpCache(user.id);
+    // Dados novos da Belvo: as parcelas antigas são buscadas de novo
+    await deleteDoc(user, "card_history").catch(() => {});
     await save(user, {
       ...states.get(user.id)!,
       running: false,

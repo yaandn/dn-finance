@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getUser } from "@/lib/auth";
 import { clearMcpSession } from "@/lib/belvo/mcp-auth";
 import { clearMcpCache } from "@/lib/belvo/mcp-client";
+import { deleteDoc } from "@/lib/user-documents";
 
 // Apaga a conexão salva deste usuário. Para revogar do lado da Belvo, use o Panorama.
 export async function POST() {
@@ -12,5 +13,6 @@ export async function POST() {
   }
   await clearMcpSession(user);
   clearMcpCache(user.id);
+  await deleteDoc(user, "card_history").catch(() => {});
   return NextResponse.json({ ok: true });
 }
