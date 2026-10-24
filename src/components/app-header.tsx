@@ -32,28 +32,37 @@ const NAV = [
 export function AppHeader({
   banks = [],
   email,
+  loading = false,
 }: {
   banks?: string[];
   email?: string | null;
+  /** Dados da página sendo buscados (troca de período ou banco). */
+  loading?: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const params = useSearchParams();
-  const [pending, startTransition] = useTransition();
-  const days = params.get("dias") ?? "30";
+  const [navigating, startTransition] = useTransition();
+  const pending = navigating || loading;
+  // Intervalo personalizado (só a página de transações usa ?de=…&ate=…)
+  const customRange =
+    pathname.startsWith("/transacoes") && params.has("de") && params.has("ate");
+  const days = customRange ? "personalizado" : (params.get("dias") ?? "30");
   const bankParam = params.get("banco");
   const bank = bankParam && banks.includes(bankParam) ? bankParam : "todos";
   const query = params.toString() ? `?${params.toString()}` : "";
 
-  function setParam(key: string, value: string | null) {
+  function setParam(key: string, value: string | null, drop: string[] = []) {
     const next = new URLSearchParams(params.toString());
     if (value === null) next.delete(key);
     else next.set(key, value);
+    for (const k of drop) next.delete(k);
     const qs = next.toString();
     startTransition(() => router.push(qs ? `${pathname}?${qs}` : pathname));
   }
 
-  const setDays = (value: string) => setParam("dias", value);
+  // Escolher 30/60/90 dias desfaz o intervalo personalizado
+  const setDays = (value: string) => setParam("dias", value, ["de", "ate"]);
   const setBank = (value: string) =>
     setParam("banco", value === "todos" ? null : value);
 
@@ -137,6 +146,11 @@ export function AppHeader({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent align="end">
+                  {customRange && (
+                    <SelectItem value="personalizado" disabled>
+                      Personalizado
+                    </SelectItem>
+                  )}
                   <SelectItem value="30">30 dias</SelectItem>
                   <SelectItem value="60">60 dias</SelectItem>
                   <SelectItem value="90">90 dias</SelectItem>

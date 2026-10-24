@@ -32,9 +32,12 @@ type Kind = "todas" | "saidas" | "entradas";
 export function TransactionsTable({
   transactions,
   initialCategory = "todas",
+  dateFilter,
 }: {
   transactions: Transaction[];
   initialCategory?: string;
+  /** Controle de período mostrado junto dos filtros. */
+  dateFilter?: React.ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<Kind>("todas");
@@ -101,6 +104,7 @@ export function TransactionsTable({
           />
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {dateFilter}
           <Tabs value={kind} onValueChange={(v) => setKind(v as Kind)}>
             <TabsList>
               <TabsTrigger value="todas">Todas</TabsTrigger>

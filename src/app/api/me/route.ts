@@ -1,0 +1,11 @@
+import { NextResponse } from "next/server";
+
+import { getUser } from "@/lib/auth";
+
+export async function GET() {
+  const user = await getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Faça login para continuar." }, { status: 401 });
+  }
+  return NextResponse.json({ id: user.id, email: user.email });
+}

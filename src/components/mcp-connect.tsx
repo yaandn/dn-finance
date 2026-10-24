@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { CheckCircle2Icon, LinkIcon, LogOutIcon, XCircleIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useDisconnectMcp } from "@/lib/api/queries";
 
 /** Mensagens que voltam do fluxo de login (?conectado=1 ou ?erro_mcp=…). */
 export function McpStatusMessage() {
@@ -54,11 +55,16 @@ export function McpConnectCard() {
 }
 
 export function McpDisconnectButton() {
+  const disconnect = useDisconnectMcp();
   return (
-    <form action="/api/belvo-mcp/disconnect" method="post">
-      <Button type="submit" variant="ghost" size="sm" className="text-muted-foreground h-7 px-2">
-        <LogOutIcon /> Desconectar
-      </Button>
-    </form>
+    <Button
+      variant="ghost"
+      size="sm"
+      className="text-muted-foreground h-7 px-2"
+      disabled={disconnect.isPending}
+      onClick={() => disconnect.mutate()}
+    >
+      <LogOutIcon /> {disconnect.isPending ? "Desconectando…" : "Desconectar"}
+    </Button>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import {
   CheckCircle2Icon,
   Loader2Icon,
@@ -10,7 +10,9 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import type { RefreshResult, SyncState } from "@/lib/belvo/mcp-sync";
+import { errorMessage } from "@/lib/api/http";
+import { queryKeys, useStartSync, useSyncState } from "@/lib/api/queries";
+import type { RefreshResult } from "@/lib/belvo/mcp-sync";
 import { cn } from "@/lib/utils";
 
 type Conn = {
@@ -46,43 +48,26 @@ function resultText(r: RefreshResult) {
   }
 }
 
-export function SyncControl({
-  connections,
-  initial,
-}: {
-  connections: Conn[];
-  initial: SyncState;
-}) {
-  const router = useRouter();
-  const [state, setState] = useState(initial);
-  const [error, setError] = useState<string | null>(null);
-  const wasRunning = useRef(initial.running);
+export function SyncControl({ connections }: { connections: Conn[] }) {
+  const queryClient = useQueryClient();
+  // Enquanto estiver rodando, a consulta se repete sozinha (refetchInterval)
+  const { data: state } = useSyncState();
+  const startSync = useStartSync();
+  const wasRunning = useRef(false);
 
-  const poll = useCallback(async () => {
-    const res = await fetch("/api/belvo-mcp/sync", { cache: "no-store" });
-    if (res.ok) setState(await res.json());
-  }, []);
-
-  // Acompanha enquanto estiver rodando; ao terminar, recarrega os dados da página
+  // Ao terminar, busca de novo os dados de todas as páginas
   useEffect(() => {
-    if (state.running) {
-      wasRunning.current = true;
-      const id = setTimeout(poll, 4000);
-      return () => clearTimeout(id);
-    }
-    if (wasRunning.current) {
+    if (state?.running) wasRunning.current = true;
+    else if (state && wasRunning.current) {
       wasRunning.current = false;
-      router.refresh();
+      void queryClient.invalidateQueries({ queryKey: queryKeys.snapshots });
     }
-  }, [state, poll, router]);
+  }, [state, queryClient]);
 
-  async function start() {
-    setError(null);
-    const res = await fetch("/api/belvo-mcp/sync", { method: "POST" });
-    const data = await res.json();
-    if (!res.ok) return setError(data.error ?? "Não foi possível iniciar.");
-    setState(data);
-  }
+  if (!state) return null;
+  const error = startSync.error
+    ? errorMessage(startSync.error, "Não foi possível iniciar.")
+    : null;
 
   const valid = connections.filter((c) => c.status === "valid");
   const showResults =
@@ -148,8 +133,8 @@ export function SyncControl({
         size="sm"
         variant="outline"
         className="h-7 shrink-0 self-start text-xs sm:self-auto"
-        disabled={state.running}
-        onClick={start}
+        disabled={state.running || startSync.isPending}
+        onClick={() => startSync.mutate()}
       >
         <RefreshCwIcon className={cn(state.running && "animate-spin")} />
         {state.running ? "Atualizando…" : "Atualizar dados"}

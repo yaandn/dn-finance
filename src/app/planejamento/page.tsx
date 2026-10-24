@@ -1,36 +1,72 @@
-import { connection } from "next/server";
+"use client";
 
-import { PageShell } from "@/components/page-shell";
-import { requireUser } from "@/lib/auth";
+import { useMemo } from "react";
+
+import { PageShell, type ShellSnapshot } from "@/components/page-shell";
 import { PlanView } from "@/components/plan-view";
+import { WidgetTokenCard } from "@/components/widget-token-card";
+import { useCardInstallments, usePlan } from "@/lib/api/queries";
+import { errorMessage } from "@/lib/api/http";
 import { buildBills } from "@/lib/finance/bills";
-import { getSnapshot, resolvePeriod } from "@/lib/finance/data";
 import { computePlanBase } from "@/lib/finance/plan";
-import { readPlan } from "@/lib/finance/plan-store";
+import type { Period } from "@/lib/finance/types";
 
-// Painel pessoal: sempre busca dados na hora (sem pré-renderização).
-export const instant = false;
-
-export default async function PlanningPage() {
-  await connection();
-  const user = await requireUser();
-  const period = resolvePeriod(90);
-  const [snapshot, { plan: settings, configured }] = await Promise.all([
-    getSnapshot(period.days),
-    readPlan(user),
-  ]);
-  const today = new Date().toISOString().slice(0, 10);
-  const billsOverview = buildBills(snapshot, today, period.from);
-  const base = computePlanBase(snapshot, billsOverview, today);
+export default function PlanningPage() {
+  // Começa junto com a busca dos dados do PageShell, não depois
+  const plan = usePlan();
 
   return (
     <PageShell
-      snapshot={snapshot}
-      period={period}
+      days={90}
+      filterBank={false}
       title="Planejamento"
       description="Quanto do salário já está comprometido e quanto sobra para o mês"
     >
-      <PlanView base={base} initial={settings} configured={configured} />
+      {(snapshot, period) =>
+        plan.data ? (
+          <Planning
+            snapshot={snapshot}
+            period={period}
+            settings={plan.data.plan}
+            configured={plan.data.configured}
+          />
+        ) : plan.error ? (
+          <p className="text-negative text-sm">
+            Não foi possível carregar o planejamento: {errorMessage(plan.error)}
+          </p>
+        ) : (
+          <div className="bg-muted h-80 animate-pulse rounded-xl" />
+        )
+      }
     </PageShell>
+  );
+}
+
+function Planning({
+  snapshot,
+  period,
+  settings,
+  configured,
+}: {
+  snapshot: ShellSnapshot;
+  period: Period;
+  settings: Parameters<typeof PlanView>[0]["initial"];
+  configured: boolean;
+}) {
+  const older = useCardInstallments(snapshot.source === "mcp");
+  const base = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return computePlanBase(
+      snapshot,
+      buildBills(snapshot, today, period.from, older.data?.transactions),
+      today,
+    );
+  }, [snapshot, period.from, older.data]);
+
+  return (
+    <>
+      <PlanView base={base} initial={settings} configured={configured} />
+      <WidgetTokenCard />
+    </>
   );
 }

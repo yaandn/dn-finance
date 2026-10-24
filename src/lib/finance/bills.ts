@@ -107,13 +107,17 @@ export function buildBills(
   today: string,
   /** Início dos dados carregados: faturas que venceram antes disso não têm pagamento visível. */
   windowStart?: string,
+  /** Parcelas de compras anteriores à janela que caem nas faturas dela. */
+  olderInstallments: Transaction[] = [],
 ): BillsOverview {
   const cards = snapshot.accounts.filter((a) => a.category === "CREDIT_CARD");
   const currentMonth = today.slice(0, 7);
   const result: CardBills[] = [];
 
   for (const account of cards) {
-    const txs = snapshot.transactions.filter((t) => t.accountId === account.id);
+    const txs = [...snapshot.transactions, ...olderInstallments].filter(
+      (t) => t.accountId === account.id,
+    );
     const payments = txs
       .filter((t) => t.type === "INFLOW" && t.internalReason === PAYMENT_REASON)
       .sort((a, b) => a.date.localeCompare(b.date));
@@ -199,8 +203,14 @@ export function buildBills(
     // Distribui os pagamentos entre as faturas fechadas, da mais antiga para a mais nova.
     // A marca de fatura que vem no pagamento é a fatura onde ele é lançado (a seguinte),
     // não a que ele quita, por isso a associação é pela data.
+    // Faturas que venceram antes do início dos dados ficam de fora: o pagamento
+    // delas não foi carregado, e elas "roubariam" o pagamento da fatura seguinte.
+    // (Aparecem por causa de parcelas de compras antigas.)
+    const payable = closed.filter(
+      (b) => !windowStart || b.dueDate! >= windowStart,
+    );
     for (const p of payments) {
-      const candidates = closed.filter((b) => {
+      const candidates = payable.filter((b) => {
         const diff = dayDiff(b.dueDate!, p.date);
         return diff <= 40 && diff >= -45;
       });

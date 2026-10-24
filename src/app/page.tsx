@@ -1,5 +1,7 @@
-import { connection } from "next/server";
+"use client";
+
 import Link from "next/link";
+import { useMemo } from "react";
 import {
   AlertCircleIcon,
   ArrowDownRightIcon,
@@ -14,7 +16,7 @@ import {
 
 import { CashflowChart, CategoryDonut } from "@/components/charts";
 import { categoryColor } from "@/lib/palette";
-import { PageShell } from "@/components/page-shell";
+import { PageShell, type ShellSnapshot } from "@/components/page-shell";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -26,24 +28,31 @@ import {
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { analyze, type Alert } from "@/lib/finance/analyze";
-import { getSnapshot, resolvePeriod } from "@/lib/finance/data";
-import { filterByBank } from "@/lib/finance/filter";
 import { money, percent, longDate } from "@/lib/format";
+import type { Period } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
 
-// Painel pessoal: sempre busca dados na hora (sem pré-renderização).
-export const instant = false;
+// Os dados vêm de /api/snapshot pelo React Query (dentro do PageShell).
+export default function DashboardPage() {
+  return (
+    <PageShell title="Painel">
+      {(snapshot, period) => <Dashboard snapshot={snapshot} period={period} />}
+    </PageShell>
+  );
+}
 
-export default async function DashboardPage({ searchParams }: PageProps<"/">) {
-  await connection();
-  const sp = await searchParams;
-  const period = resolvePeriod(Number(sp.dias ?? 30));
-  const snapshot = filterByBank(await getSnapshot(period.days), sp.banco);
-  const a = analyze(snapshot, period);
+function Dashboard({
+  snapshot,
+  period,
+}: {
+  snapshot: ShellSnapshot;
+  period: Period;
+}) {
+  const a = useMemo(() => analyze(snapshot, period), [snapshot, period]);
   const query = `?dias=${period.days}`;
 
   return (
-    <PageShell snapshot={snapshot} period={period} title="Painel">
+    <>
       {/* Indicadores principais */}
       <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Kpi
@@ -259,7 +268,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/">) {
         Dados coletados em {longDate(snapshot.fetchedAt)}. Pagamentos da própria fatura, Pix no
         crédito e parcelas futuras não entram nos totais.
       </p>
-    </PageShell>
+    </>
   );
 }
 

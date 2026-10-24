@@ -1,16 +1,19 @@
-import { connection } from "next/server";
+"use client";
+
+import { useMemo } from "react";
 import {
   AlertCircleIcon,
   CalendarClockIcon,
   ChevronDownIcon,
   CreditCardIcon,
   LayersIcon,
+  Loader2Icon,
   ReceiptIcon,
   WalletCardsIcon,
 } from "lucide-react";
 
 import { BillsChart } from "@/components/charts";
-import { PageShell } from "@/components/page-shell";
+import { PageShell, type ShellSnapshot } from "@/components/page-shell";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -21,41 +24,51 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { errorMessage } from "@/lib/api/http";
+import { useCardInstallments } from "@/lib/api/queries";
 import {
   BILL_STATUS,
   buildBills,
   type Bill,
   type CardBills,
 } from "@/lib/finance/bills";
-import { getSnapshot, resolvePeriod } from "@/lib/finance/data";
-import { filterByBank } from "@/lib/finance/filter";
 import { longDate, money, monthLong, percent, shortDate } from "@/lib/format";
+import type { Period } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
-
-// Painel pessoal: sempre busca dados na hora (sem pré-renderização).
-export const instant = false;
 
 /** Faturas precisam de mais histórico que o painel: sempre 90 dias. */
 const DAYS = 90;
 
-export default async function BillsPage({
-  searchParams,
-}: PageProps<"/faturas">) {
-  await connection();
-  const sp = await searchParams;
-  const period = resolvePeriod(DAYS);
-  const snapshot = filterByBank(await getSnapshot(period.days), sp.banco);
-  const today = new Date().toISOString().slice(0, 10);
-  const o = buildBills(snapshot, today, period.from);
-  const usedLimit = o.totalLimit - o.availableLimit;
-
+export default function BillsPage() {
   return (
     <PageShell
-      snapshot={snapshot}
-      period={period}
+      days={DAYS}
       title="Faturas"
       description={`Faturas dos cartões montadas a partir dos lançamentos dos últimos ${DAYS} dias`}
     >
+      {(snapshot, period) => <Bills snapshot={snapshot} period={period} />}
+    </PageShell>
+  );
+}
+
+function Bills({
+  snapshot,
+  period,
+}: {
+  snapshot: ShellSnapshot;
+  period: Period;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const older = useCardInstallments(snapshot.source === "mcp");
+  const o = useMemo(
+    () => buildBills(snapshot, today, period.from, older.data?.transactions),
+    [snapshot, today, period.from, older.data],
+  );
+  const usedLimit = o.totalLimit - o.availableLimit;
+
+  return (
+    <>
+      <OlderInstallmentsStatus query={older} />
       {o.cards.length === 0 ? (
         <Card>
           <CardContent className="text-muted-foreground py-10 text-center text-sm">
@@ -181,7 +194,31 @@ export default async function BillsPage({
           )}
         </>
       )}
-    </PageShell>
+    </>
+  );
+}
+
+/** Andamento da busca das parcelas de compras antigas (pode levar um tempo). */
+function OlderInstallmentsStatus({
+  query,
+}: {
+  query: ReturnType<typeof useCardInstallments>;
+}) {
+  if (query.fetchStatus === "idle" && !query.error) return null;
+  if (query.error) {
+    return (
+      <p className="text-warning text-xs">
+        Não foi possível buscar parcelas de compras antigas (
+        {errorMessage(query.error)}). As faturas podem estar incompletas.
+      </p>
+    );
+  }
+  if (!query.isFetching) return null;
+  return (
+    <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
+      <Loader2Icon className="size-3.5 animate-spin" />
+      Buscando parcelas de compras do último ano…
+    </p>
   );
 }
 

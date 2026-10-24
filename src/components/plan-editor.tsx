@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { PlusIcon, SaveIcon, Trash2Icon } from "lucide-react";
 
-import { savePlan } from "@/app/planejamento/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useSavePlan } from "@/lib/api/queries";
 import type { FixedCost, PlanSettings } from "@/lib/finance/plan-store";
 
 const field = "text-muted-foreground text-xs font-medium";
@@ -22,7 +22,8 @@ export function PlanEditor({
   dirty: boolean;
 }) {
   const [status, setStatus] = useState<"idle" | "saved" | "error">("idle");
-  const [pending, startTransition] = useTransition();
+  const savePlan = useSavePlan();
+  const pending = savePlan.isPending;
 
   const update = (fn: (p: PlanSettings) => PlanSettings) => {
     onChange(fn);
@@ -39,13 +40,12 @@ export function PlanEditor({
     }));
 
   function save() {
-    startTransition(async () => {
-      try {
-        onSaved(await savePlan(plan));
+    savePlan.mutate(plan, {
+      onSuccess: (saved) => {
+        onSaved(saved);
         setStatus("saved");
-      } catch {
-        setStatus("error");
-      }
+      },
+      onError: () => setStatus("error"),
     });
   }
 

@@ -1,25 +1,63 @@
-import { connection } from "next/server";
+"use client";
+
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+
+import { DateRangePicker, type IsoRange } from "@/components/date-range-picker";
 import { PageShell } from "@/components/page-shell";
 import { TransactionsTable } from "@/components/transactions-table";
-import { getSnapshot, resolvePeriod } from "@/lib/finance/data";
-import { filterByBank } from "@/lib/finance/filter";
+import { MAX_RANGE_DAYS } from "@/lib/finance/period";
+import type { Period, Transaction } from "@/lib/finance/types";
 
-// Painel pessoal: sempre busca dados na hora (sem pré-renderização).
-export const instant = false;
+export default function TransactionsPage() {
+  return (
+    <PageShell title="Transações" allowRange>
+      {(snapshot, period) => (
+        <Transactions transactions={snapshot.transactions} period={period} />
+      )}
+    </PageShell>
+  );
+}
 
-export default async function TransactionsPage({ searchParams }: PageProps<"/transacoes">) {
-  await connection();
-  const sp = await searchParams;
-  const period = resolvePeriod(Number(sp.dias ?? 30));
-  const snapshot = filterByBank(await getSnapshot(period.days), sp.banco);
-  const initialCategory = typeof sp.categoria === "string" ? sp.categoria : "todas";
+function Transactions({
+  transactions,
+  period,
+}: {
+  transactions: Transaction[];
+  period: Period;
+}) {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const initialCategory = params.get("categoria") ?? "todas";
+  const custom = params.has("de") && params.has("ate");
+
+  // O intervalo fica na URL (?de=…&ate=…): o PageShell busca esse período na Belvo
+  function setRange(range: IsoRange | null) {
+    const next = new URLSearchParams(params.toString());
+    if (range) {
+      next.set("de", range.from);
+      next.set("ate", range.to);
+      next.delete("dias");
+    } else {
+      next.delete("de");
+      next.delete("ate");
+    }
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }
 
   return (
-    <PageShell snapshot={snapshot} period={period} title="Transações">
-      <TransactionsTable
-        transactions={snapshot.transactions}
-        initialCategory={initialCategory}
-      />
-    </PageShell>
+    <TransactionsTable
+      transactions={transactions}
+      initialCategory={initialCategory}
+      dateFilter={
+        <DateRangePicker
+          value={{ from: period.from, to: period.to }}
+          custom={custom}
+          maxDays={MAX_RANGE_DAYS}
+          onChange={setRange}
+        />
+      }
+    />
   );
 }

@@ -1,7 +1,9 @@
-import { connection } from "next/server";
+"use client";
+
+import { useMemo } from "react";
 import { CreditCardIcon, LandmarkIcon, PiggyBankIcon } from "lucide-react";
 
-import { PageShell } from "@/components/page-shell";
+import { PageShell, type ShellSnapshot } from "@/components/page-shell";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -13,30 +15,33 @@ import {
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { analyze } from "@/lib/finance/analyze";
-import { getSnapshot, resolvePeriod } from "@/lib/finance/data";
-import { filterByBank } from "@/lib/finance/filter";
 import { longDate, money, percent } from "@/lib/format";
-import type { Account } from "@/lib/finance/types";
+import type { Account, Period } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
 
-// Painel pessoal: sempre busca dados na hora (sem pré-renderização).
-export const instant = false;
-
-export default async function AccountsPage({ searchParams }: PageProps<"/contas">) {
-  await connection();
-  const sp = await searchParams;
-  const period = resolvePeriod(Number(sp.dias ?? 30));
-  const snapshot = filterByBank(await getSnapshot(period.days), sp.banco);
-  const a = analyze(snapshot, period);
-  const netWorth = a.cashBalance - a.cardDebt - a.loanDebt;
-
+export default function AccountsPage() {
   return (
     <PageShell
-      snapshot={snapshot}
-      period={period}
       title="Contas e dívidas"
       description="Saldos, limites e empréstimos de todas as instituições conectadas"
     >
+      {(snapshot, period) => <Accounts snapshot={snapshot} period={period} />}
+    </PageShell>
+  );
+}
+
+function Accounts({
+  snapshot,
+  period,
+}: {
+  snapshot: ShellSnapshot;
+  period: Period;
+}) {
+  const a = useMemo(() => analyze(snapshot, period), [snapshot, period]);
+  const netWorth = a.cashBalance - a.cardDebt - a.loanDebt;
+
+  return (
+    <>
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Summary label="Em conta" value={a.cashBalance} tone="positive" />
         <Summary label="Usado nos cartões" value={-a.cardDebt} />
@@ -82,7 +87,7 @@ export default async function AccountsPage({ searchParams }: PageProps<"/contas"
           <LoanCard key={l.id} account={l} />
         ))}
       </Section>
-    </PageShell>
+    </>
   );
 }
 

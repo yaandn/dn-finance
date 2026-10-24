@@ -1,0 +1,60 @@
+# Gere o projeto com: xcodegen generate (brew install xcodegen)
+name: MinhasFinancas
+options:
+  bundleIdPrefix: dev.dnfinance
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    # "Sign to Run Locally". Se o widget não aparecer na galeria, escolha seu
+    # time em Signing & Capabilities nos dois targets.
+    CODE_SIGN_IDENTITY: "-"
+targets:
+  MinhasFinancas:
+    type: application
+    platform: macOS
+    sources: [App]
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Minhas Finanças
+        LSApplicationCategoryType: public.app-category.finance
+    entitlements:
+      path: App/App.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.dnfinance.mac
+    dependencies:
+      - target: SobraWidget
+        embed: true
+  SobraWidget:
+    type: app-extension
+    platform: macOS
+    sources: [Widget]
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: Sobra do mês
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        # O app roda em http://localhost:3000
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    entitlements:
+      path: Widget/Widget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.dnfinance.mac.widget
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework

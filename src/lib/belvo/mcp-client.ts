@@ -21,20 +21,38 @@ export type ConnectionSync = {
   lastSyncedAt: string | null;
 };
 
+type CardHistory = { accounts: Raw[]; transactions: Raw[] };
+
 type McpData = {
   accounts: Raw[];
   transactions: Raw[];
   institutions: string[];
   connections: ConnectionSync[];
 };
-type CacheEntry = { at: number; data: McpData };
+type CacheEntry = { at: number; from: string; to: string; data: McpData };
 const CACHE_TTL_MS = 10 * 60 * 1000;
 /** Chave: usuário + período. Nunca compartilhar entradas entre usuários. */
 const cache = new Map<string, CacheEntry>();
 
+/** Entrada válida do usuário cujo período cobre [from, to] (quem usa recorta por data). */
+function cachedCovering(userId: string, from: string, to: string) {
+  for (const [key, entry] of cache) {
+    if (!key.startsWith(`${userId}:`)) continue;
+    if (Date.now() - entry.at >= CACHE_TTL_MS) cache.delete(key);
+    else if (entry.from <= from && entry.to >= to) return entry.data;
+  }
+  return null;
+}
+
+/** Parcelas de compras antigas: as compras não mudam, então o cache dura mais. */
+const HISTORY_TTL_MS = 12 * 60 * 60 * 1000;
+const historyCache = new Map<string, { at: number; data: CardHistory }>();
+
 export function clearMcpCache(userId: string) {
-  for (const key of cache.keys()) {
-    if (key.startsWith(`${userId}:`)) cache.delete(key);
+  for (const map of [cache, historyCache]) {
+    for (const key of map.keys()) {
+      if (key.startsWith(`${userId}:`)) map.delete(key);
+    }
   }
 }
 
@@ -105,7 +123,8 @@ async function listAll(
   client: Client,
   name: string,
   args: Raw,
-  pageSize = 20,
+  /** Máximo aceito pelo servidor: menos idas e voltas por listagem. */
+  pageSize = 50,
   maxPages = 40,
 ) {
   let size = pageSize;
@@ -136,6 +155,31 @@ async function listAll(
   throw new Error(`Não foi possível paginar ${name}.`);
 }
 
+/** Contas das conexões válidas, com o nome da instituição vindo da conexão. */
+function withInstitution(accounts: Raw[], byConnection: Map<string, Raw>) {
+  const valid = accounts.filter((a) => byConnection.has(a.connection_id ?? a.link));
+  for (const a of valid) {
+    const conn = byConnection.get(a.connection_id ?? a.link);
+    a.institution = {
+      ...(a.institution ?? {}),
+      display_name:
+        conn?.institution?.display_name ?? a.institution?.display_name,
+    };
+  }
+  return valid;
+}
+
+async function validConnections(client: Client) {
+  const connections = await callJson(client, "list_connections", {});
+  const items: Raw[] = connections.items ?? [];
+  const valid = items.filter((c) => c.status === "valid");
+  return {
+    items,
+    valid,
+    byConnection: new Map(valid.map((c) => [c.connection_id, c])),
+  };
+}
+
 export function toConnectionSync(c: Raw): ConnectionSync {
   return {
     connectionId: c.connection_id,
@@ -151,39 +195,27 @@ export async function fetchFromMcp(
   from: string,
   to: string,
 ): Promise<McpData> {
-  const key = `${user.id}:${from}:${to}`;
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.data;
+  const hit = cachedCovering(user.id, from, to);
+  if (hit) return hit;
 
   const data = await withClient(user, async (client) => {
-    const connections = await callJson(client, "list_connections", {});
-    const valid: Raw[] = (connections.items ?? []).filter(
-      (c: Raw) => c.status === "valid",
-    );
+    const { items, valid, byConnection } = await validConnections(client);
 
-    const accounts: Raw[] = [];
-    const transactions: Raw[] = [];
-    // Uma instituição por vez: o servidor limita requisições simultâneas
-    for (const conn of valid) {
-      const accs = await listAll(client, "open_finance_list_accounts", {
-        connection_id: conn.connection_id,
-      });
-      for (const a of accs) {
-        a.institution = {
-          ...(a.institution ?? {}),
-          display_name:
-            conn.institution?.display_name ?? a.institution?.display_name,
-        };
-      }
-      accounts.push(...accs);
-      transactions.push(
-        ...(await listAll(client, "open_finance_list_transactions", {
-          connection_id: conn.connection_id,
-          start_date: from,
-          end_date: to,
-        })),
-      );
-    }
+    // Sem connection_id as ferramentas já trazem todas as instituições de uma vez
+    // (cada item vem com connection_id). Uma chamada por vez: o servidor limita
+    // requisições simultâneas.
+    const accounts = withInstitution(
+      await listAll(client, "open_finance_list_accounts", {}),
+      byConnection,
+    );
+    const transactions = valid.length
+      ? (
+          await listAll(client, "open_finance_list_transactions", {
+            start_date: from,
+            end_date: to,
+          })
+        ).filter((t) => byConnection.has(t.connection_id))
+      : [];
 
     return {
       accounts,
@@ -191,10 +223,70 @@ export async function fetchFromMcp(
       institutions: valid.map(
         (c) => c.institution?.display_name ?? c.institution?.name,
       ),
-      connections: (connections.items ?? []).map(toConnectionSync),
+      connections: items.map(toConnectionSync),
     };
   });
 
-  cache.set(key, { at: Date.now(), data });
+  cache.set(`${user.id}:${from}:${to}`, { at: Date.now(), from, to, data });
+  return data;
+}
+
+/**
+ * Parcelas de compras feitas entre `since` e `before` que ainda caem em faturas
+ * a partir de `fromMonth` (YYYY-MM). A Belvo filtra pela data da compra e cada
+ * parcela vem com essa data, então uma compra de dez meses atrás só aparece
+ * buscando dez meses atrás.
+ */
+export async function fetchCardInstallmentsFromMcp(
+  user: CurrentUser,
+  since: string,
+  before: string,
+  fromMonth: string,
+): Promise<CardHistory> {
+  const key = `${user.id}:${since}:${before}`;
+  const hit = historyCache.get(key);
+  if (hit && Date.now() - hit.at < HISTORY_TTL_MS) return hit.data;
+
+  const data = await withClient(user, async (client) => {
+    const { byConnection } = await validConnections(client);
+    const cards = withInstitution(
+      await listAll(client, "open_finance_list_accounts", {
+        category: "CREDIT_CARD",
+      }),
+      byConnection,
+    );
+    const transactions: Raw[] = [];
+    // Um cartão por vez; um ano de lançamentos passa de mil itens
+    for (const card of cards) {
+      const items = await listAll(
+        client,
+        "open_finance_list_transactions",
+        {
+          account_id: card.account_id,
+          type: "OUTFLOW",
+          start_date: since,
+          end_date: before,
+        },
+        50,
+        120,
+      );
+      transactions.push(
+        ...items.filter((t) => {
+          const cc = t.credit_card_data;
+          if (!(Number(cc?.number_of_installments) > 1)) return false;
+          const month = String(
+            cc?.bill_forecast_date ??
+              t.accounting_date ??
+              t.inferred_accounting_date ??
+              "",
+          ).slice(0, 7);
+          return month >= fromMonth;
+        }),
+      );
+    }
+    return { accounts: cards, transactions };
+  });
+
+  historyCache.set(key, { at: Date.now(), data });
   return data;
 }

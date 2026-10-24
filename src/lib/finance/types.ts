@@ -106,3 +106,13 @@ export type FinanceSnapshot = {
 };
 
 export type Period = { from: string; to: string; days: number };
+
+/** Resposta de /api/snapshot: os dados e o período que o servidor usou. */
+export type SnapshotResponse = FinanceSnapshot & { period: Period };
+
+/** Resposta de /api/installments: parcelas de compras feitas entre `since` e `before`. */
+export type CardInstallmentsResponse = {
+  since: string;
+  before: string;
+  transactions: Transaction[];
+};

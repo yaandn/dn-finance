@@ -37,7 +37,11 @@ export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   // Telas de quem ainda não entrou: quem já está logado vai para o painel
   const isGuestPage = GUEST_PAGES.has(pathname);
-  const isPublic = isGuestPage || pathname === "/auth/confirm";
+  // O widget do Mac não tem cookie de sessão: a rota confere o token dele
+  const isPublic =
+    isGuestPage ||
+    pathname === "/auth/confirm" ||
+    pathname === "/api/widget/plan";
 
   if (!loggedIn && !isPublic) {
     if (pathname.startsWith("/api/")) {

@@ -40,7 +40,7 @@ O app é um cliente do servidor MCP público do Belvo Panorama (`panorama-mcp.be
 2. Autorize o acesso. A Belvo devolve você para `/api/belvo-mcp/callback`, e o app troca o código por um token (PKCE).
 3. O token fica em `.data/belvo-mcp.json` (permissão 600, no `.gitignore`) e é renovado sozinho. **Desconectar** apaga o arquivo.
 
-Os dados vêm das ferramentas `list_connections`, `open_finance_list_accounts` e `open_finance_list_transactions`, com cache de 10 minutos.
+Os dados vêm das ferramentas `list_connections`, `open_finance_list_accounts` e `open_finance_list_transactions`, com cache de 10 minutos no servidor. O navegador nunca fala com o MCP: as páginas buscam `/api/snapshot` com axios + React Query (cache de 5 minutos no cliente), e só a rota chama o MCP com o token do usuário.
 
 **Atualização:** a Belvo guarda os dados da última sincronização com o banco. O botão **Atualizar dados** chama `refresh_connection` para cada banco (pode levar alguns minutos; roda em segundo plano). Ao abrir o app com dados de mais de 24 h, ele atualiza sozinho, no máximo a cada 12 h, para ficar dentro dos limites mensais do Open Finance. O estado fica em `.data/belvo-sync.json`.
 
@@ -55,7 +55,10 @@ Os dados vêm das ferramentas `list_connections`, `open_finance_list_accounts` e
 
 ```
 src/
-  app/                    páginas (painel, transações, contas)
+  app/                    páginas (componentes cliente) e rotas /api
+  app/api/                snapshot, plan, me e belvo-mcp/* (única ponte com o MCP)
+  lib/api/http.ts         instância do axios (baseURL /api, 401 → /login)
+  lib/api/queries.ts      chaves e hooks do React Query (consultas e mutations)
   components/ui/          componentes shadcn/ui
   components/             cabeçalho, gráficos, tabela
   lib/belvo/client.ts     cliente da API (server-only, Basic Auth, paginação)
