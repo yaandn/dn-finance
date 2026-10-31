@@ -30,6 +30,7 @@ import {
   type PlanBase,
 } from "@/lib/finance/plan";
 import type { PlanSettings } from "@/lib/finance/plan-store";
+import { CADENCE_LABEL } from "@/lib/finance/recurring";
 import {
   longDate,
   money,
@@ -80,6 +81,12 @@ export function PlanView({
       color: "var(--chart-2)",
     },
     {
+      key: "recorrentes",
+      label: "Recorrentes",
+      value: p.recurringTotal,
+      color: "var(--chart-3)",
+    },
+    {
       key: "faturas",
       label: "Faturas atuais",
       value: p.billsTotal,
@@ -90,6 +97,12 @@ export function PlanView({
       label: "Empréstimos",
       value: p.loansTotal,
       color: "var(--chart-4)",
+    },
+    {
+      key: "dividas",
+      label: "Dívidas",
+      value: p.debtsTotal,
+      color: "var(--chart-5)",
     },
     {
       key: "guardar",
@@ -189,6 +202,9 @@ export function PlanView({
                   <Line label="Outras rendas" value={settings.otherIncome} />
                 )}
                 <Line label="Contas fixas" value={-p.fixedTotal} />
+                {p.recurringTotal > 0 && (
+                  <Line label="Recorrentes fora do cartão" value={-p.recurringTotal} />
+                )}
                 <Line
                   label="Faturas atuais dos cartões"
                   value={-p.billsTotal}
@@ -196,6 +212,9 @@ export function PlanView({
                 />
                 {p.loansTotal > 0 && (
                   <Line label="Parcelas de empréstimo" value={-p.loansTotal} />
+                )}
+                {p.debtsTotal > 0 && (
+                  <Line label="Dívidas temporárias" value={-p.debtsTotal} />
                 )}
                 <Line
                   label={`Guardar (${settings.savingsPct}% do salário)`}
@@ -311,14 +330,17 @@ export function PlanView({
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <LandmarkIcon className="size-4" /> Contas fixas e parcelas
+                  <LandmarkIcon className="size-4" /> Contas fixas, recorrentes e parcelas
                 </CardTitle>
                 <CardDescription>
                   Compromissos que se repetem todo mês
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-1">
-                {settings.fixed.length === 0 && p.loans.length === 0 && (
+                {settings.fixed.length === 0 &&
+                  p.loans.length === 0 &&
+                  p.recurring.length === 0 &&
+                  p.debts.length === 0 && (
                   <p className="text-muted-foreground text-sm">
                     Nenhuma conta fixa cadastrada.
                   </p>
@@ -334,6 +356,15 @@ export function PlanView({
                       muted={f.onCard}
                     />
                   ))}
+                {p.recurring.map((r) => (
+                  <Row
+                    key={r.id}
+                    title={r.name}
+                    subtitle={`Recorrente ${CADENCE_LABEL[r.cadence]}${r.nextDate ? ` · próxima ~${shortDate(r.nextDate)}` : ""}${r.onCard ? " · no cartão (entra na fatura)" : ""}`}
+                    value={r.monthly}
+                    muted={r.onCard}
+                  />
+                ))}
                 {p.loans.map((l) => (
                   <Row
                     key={l.id}
@@ -342,10 +373,29 @@ export function PlanView({
                     value={l.installment}
                   />
                 ))}
+                {p.debts.map((d) => (
+                  <Row
+                    key={d.id}
+                    title={d.name}
+                    subtitle={
+                      d.single
+                        ? `Dívida · pagamento único em ${longDate(d.date!)}${d.current ? "" : " (fora deste mês)"}`
+                        : `Dívida · todo dia ${d.day} · ${d.remaining === 1 ? "última parcela" : `faltam ${d.remaining} parcelas`} (até ${monthLong(d.endMonth)})`
+                    }
+                    value={d.amount}
+                    muted={!d.current}
+                  />
+                ))}
                 <Total
                   label="Total por mês"
-                  value={p.fixedTotal + p.loansTotal}
+                  value={p.fixedTotal + p.recurringTotal + p.loansTotal + p.debtsTotal}
                 />
+                {p.recurringOnCardTotal > 0 && (
+                  <p className="text-muted-foreground pt-1 text-xs">
+                    Mais {money(p.recurringOnCardTotal)}/mês de recorrentes no cartão, que já entram
+                    nas faturas.
+                  </p>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -406,6 +456,9 @@ export function PlanView({
                     </p>
                     <dl className="text-muted-foreground space-y-0.5 text-xs">
                       <Mini label="Contas fixas" value={m.fixed} />
+                      {m.recurring > 0 && (
+                        <Mini label="Recorrentes" value={m.recurring} />
+                      )}
                       <Mini
                         label="Parcelas já no cartão"
                         value={m.cardCommitted}
@@ -413,6 +466,7 @@ export function PlanView({
                       {m.loans > 0 && (
                         <Mini label="Empréstimos" value={m.loans} />
                       )}
+                      {m.debts > 0 && <Mini label="Dívidas" value={m.debts} />}
                       <Mini label="Guardar" value={m.savings} />
                     </dl>
                   </div>
@@ -572,6 +626,8 @@ const KIND_STYLE: Record<AgendaItem["kind"], string> = {
   fixa: "bg-chart-2",
   fatura: "bg-chart-1",
   emprestimo: "bg-chart-4",
+  recorrente: "bg-chart-3",
+  divida: "bg-chart-5",
 };
 
 function Agenda({ items }: { items: AgendaItem[] }) {

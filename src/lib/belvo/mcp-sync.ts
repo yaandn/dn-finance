@@ -194,7 +194,6 @@ async function run(user: CurrentUser, trigger: "manual" | "auto") {
     clearMcpCache(user.id);
     // Dados novos da Belvo: as parcelas antigas são buscadas de novo
     await deleteDoc(user, "card_history").catch(() => {});
-    await deleteDoc(user, "recurring_cache").catch(() => {});
     await save(user, {
       ...states.get(user.id)!,
       running: false,

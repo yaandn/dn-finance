@@ -20,11 +20,24 @@ import {
   fetchCardInstallmentsFromMcp,
   fetchFromMcp,
   friendlyMcpError,
-  onMcpCacheClear,
 } from "@/lib/belvo/mcp-client";
 import { normalizeAccount, normalizeTransaction } from "@/lib/belvo/normalize";
+import {
+  clearPluggyCache,
+  fetchFromPluggy,
+  hasPluggyItems,
+  type PluggyRaw,
+} from "@/lib/pluggy/data";
+import {
+  normalizePluggyAccount,
+  alignWithBills,
+  normalizePluggyTransaction,
+  projectFutureInstallments,
+} from "@/lib/pluggy/normalize";
+import { deleteDoc } from "@/lib/user-documents";
 import { readDoc, writeDoc } from "@/lib/user-documents";
 import { MAX_RANGE_DAYS, resolvePeriod, resolveRange } from "@/lib/finance/period";
+import { linkCardPayments, linkOwnTransfers } from "@/lib/finance/classify";
 import { detectRecurring } from "@/lib/finance/recurring";
 import type {
   Account,
@@ -34,6 +47,7 @@ import type {
   Period,
   RecurringResponse,
   SnapshotResponse,
+  Transaction,
 } from "@/lib/finance/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -56,7 +70,7 @@ async function readExportFile(): Promise<{
   }
 }
 
-function pickSource(mcpConnected: boolean): DataSource {
+function pickSource(mcpConnected: boolean, pluggyConnected = false): DataSource {
   const forced = process.env.DATA_SOURCE as DataSource | undefined;
   // "belvo" (chaves no .env) e "file" (data/belvo-export.json) são de uma conta
   // só e apareceriam para todos os usuários: só valem em desenvolvimento.
@@ -66,20 +80,72 @@ function pickSource(mcpConnected: boolean): DataSource {
   )
     return forced;
   if (forced === "demo") return "demo";
+  if (pluggyConnected) return "pluggy";
   return mcpConnected ? "mcp" : "demo";
+}
+
+/** Fonte do usuário (consulta as conexões salvas de Pluggy e Belvo). */
+async function sourceFor(user: CurrentUser) {
+  const [mcpConnected, pluggyConnected] = await Promise.all([
+    hasMcpSession(user),
+    hasPluggyItems(user),
+  ]);
+  return { source: pickSource(mcpConnected, pluggyConnected), mcpConnected, pluggyConnected };
+}
+
+/** Fontes que vão ao banco a cada busca e por isso guardam caches no banco de dados. */
+const isLive = (source: DataSource) => source === "pluggy" || source === "mcp";
+
+function fromBelvo(rawAccounts: Raw[], rawTransactions: Raw[], periodEnd: string) {
+  const accounts = rawAccounts.map(normalizeAccount);
+  const byId = new Map<string, Account>(accounts.map((a) => [a.id, a]));
+  return {
+    accounts,
+    transactions: rawTransactions.map((t) => normalizeTransaction(t, byId, periodEnd)),
+  };
+}
+
+function fromPluggy(
+  data: PluggyRaw,
+  periodEnd: string,
+  /** Cria as parcelas que ainda vão entrar nas próximas faturas. */
+  projectInstallments = true,
+) {
+  const accounts = data.accounts.map((a) => normalizePluggyAccount(a, a.institution));
+  const byId = new Map<string, Account>(accounts.map((a) => [a.id, a]));
+  const bills = new Map<string, Raw>(data.bills.map((b) => [b.id, b]));
+  const aligned = alignWithBills(data.transactions, data.bills);
+  const raw = projectInstallments
+    ? [
+        ...aligned,
+        ...projectFutureInstallments(aligned, new Date().toISOString().slice(0, 7)),
+      ]
+    : aligned;
+  return {
+    accounts,
+    transactions: raw.map((t) =>
+      normalizePluggyTransaction(t, byId, bills, data.categories, periodEnd),
+    ),
+  };
+}
+
+/**
+ * Esquece os dados derivados da Pluggy (cache em memória e parcelas antigas).
+ * Chamado ao conectar, desconectar e atualizar.
+ */
+export async function clearPluggyData(user: CurrentUser) {
+  clearPluggyCache(user.id);
+  await deleteDoc(user, "card_history").catch(() => {});
 }
 
 function build(
   source: DataSource,
-  rawAccounts: Raw[],
-  rawTransactions: Raw[],
+  { accounts, transactions: all }: { accounts: Account[]; transactions: Transaction[] },
   period: Period,
   extras: Partial<FinanceSnapshot> = {},
 ): FinanceSnapshot {
-  const accounts = rawAccounts.map(normalizeAccount);
-  const byId = new Map<string, Account>(accounts.map((a) => [a.id, a]));
-  const transactions = rawTransactions
-    .map((t) => normalizeTransaction(t, byId, period.to))
+  // Antes do recorte: o pagamento no cartão e a saída da conta podem cair em dias diferentes
+  const transactions = linkOwnTransfers(linkCardPayments(all))
     .filter((t) => t.date >= period.from && t.date <= period.to)
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 
@@ -92,6 +158,7 @@ function build(
     fetchedAt: new Date().toISOString(),
     warnings: [],
     mcpConnected: false,
+    pluggyConnected: false,
     ...extras,
   };
 }
@@ -138,7 +205,8 @@ export async function getCardInstallments(
   const since = shiftMonths(window.from, -INSTALLMENT_HISTORY_MONTHS);
   const empty = { since, before, transactions: [] };
   // As outras fontes não têm histórico além do período carregado
-  if (pickSource(await hasMcpSession(user)) !== "mcp") return empty;
+  const { source } = await sourceFor(user);
+  if (!isLive(source)) return empty;
 
   const saved = await readDoc<CardHistoryDoc>(user, "card_history").catch(
     () => null,
@@ -151,21 +219,24 @@ export async function getCardInstallments(
     };
   }
 
-  const data = await fetchCardInstallmentsFromMcp(
-    user,
-    since,
-    before,
-    window.from.slice(0, 7),
-  );
-  const accounts = data.accounts.map(normalizeAccount);
-  const byId = new Map<string, Account>(accounts.map((a) => [a.id, a]));
-  const result: CardInstallmentsResponse = {
-    since,
-    before,
-    transactions: data.transactions.map((t) =>
-      normalizeTransaction(t, byId, window.to),
-    ),
-  };
+  const fromMonth = window.from.slice(0, 7);
+  let transactions: Transaction[];
+  if (source === "pluggy") {
+    const data = await fetchFromPluggy(user, since, before, true);
+    // Uma conexão que falhou deixaria parcelas de fora: melhor não guardar
+    if (data.warnings.length) throw new Error(data.warnings.join(" "));
+    // Sem projeção: as parcelas seguintes destas compras já estão no período
+    transactions = fromPluggy(data, window.to, false).transactions.filter(
+      (t) =>
+        t.type === "OUTFLOW" &&
+        t.installment &&
+        (t.bill?.forecast ?? t.accountingDate ?? "").slice(0, 7) >= fromMonth,
+    );
+  } else {
+    const data = await fetchCardInstallmentsFromMcp(user, since, before, fromMonth);
+    transactions = fromBelvo(data.accounts, data.transactions, window.to).transactions;
+  }
+  const result: CardInstallmentsResponse = { since, before, transactions };
   // Sem a migration do card_history o cache fica só na memória do servidor
   await writeDoc(user, "card_history", {
     ...result,
@@ -174,83 +245,84 @@ export async function getCardInstallments(
   return result;
 }
 
-/** Mesma validade do cache das parcelas; a sincronização também apaga este. */
-const RECURRING_CACHE_MS = INSTALLMENT_CACHE_MS;
+/** Estabelecimentos marcados como recorrentes (merchantKey) e o nome mostrado. */
+export type RecurringMarks = { marks: { key: string; name: string; addedAt: string }[] };
 
-/**
- * Gastos recorrentes de cerca de um ano. Na fonte MCP o resultado (pequeno)
- * fica salvo em user_documents, porque buscar um ano na Belvo é demorado.
- */
-/**
- * Último resultado por usuário nesta instância do servidor. Serve quando a
- * migration do recurring_cache ainda não foi aplicada (só no próprio servidor).
- */
-const recurringMemory = new Map<string, RecurringResponse>();
-// A sincronização e o desconectar limpam o cache do MCP: este vai junto
-onMcpCacheClear((userId) => recurringMemory.delete(userId));
-
-const fresh = (r: RecurringResponse | null | undefined): r is RecurringResponse =>
-  !!r && Date.now() - Date.parse(r.fetchedAt) < RECURRING_CACHE_MS;
-
-/**
- * Só o que já foi calculado, sem ir à Belvo (null se não houver). O card do
- * Painel usa isto: buscar um ano a cada visita estoura o limite da Belvo.
- */
-export async function getCachedRecurring(
-  user: CurrentUser,
-): Promise<RecurringResponse | null> {
-  const memory = recurringMemory.get(user.id);
-  if (fresh(memory)) return memory;
-  const saved = await readDoc<RecurringResponse>(user, "recurring_cache").catch(() => null);
-  return fresh(saved) ? saved : null;
+export async function readRecurringMarks(user: CurrentUser) {
+  return (await readDoc<RecurringMarks>(user, "recurring_marks").catch(() => null))?.marks ?? [];
 }
 
+/** Marca (ou desmarca) um estabelecimento como recorrente. */
+export async function setRecurringMark(
+  user: CurrentUser,
+  key: string,
+  name: string | null,
+) {
+  const marks = (await readRecurringMarks(user)).filter((m) => m.key !== key);
+  if (name !== null) marks.push({ key, name, addedAt: new Date().toISOString() });
+  await writeDoc(user, "recurring_marks", { marks } satisfies RecurringMarks);
+}
+
+/** Gastos recorrentes de cerca de um ano, calculados a cada pedido. */
 export async function getRecurring(user: CurrentUser): Promise<RecurringResponse> {
   const today = new Date().toISOString().slice(0, 10);
   const period = resolveRange(shiftDays(today, -(MAX_RANGE_DAYS - 1)), today)!;
-  const mcp = pickSource(await hasMcpSession(user)) === "mcp";
-
-  if (mcp) {
-    const cached = await getCachedRecurring(user);
-    if (cached) return cached;
-  }
-
+  const [{ source }, marks] = await Promise.all([sourceFor(user), readRecurringMarks(user)]);
+  const live = isLive(source);
   const snapshot = await load(user, period);
-  // Se a Belvo falhou, o load devolve a demonstração: aqui isso viraria uma
+  // Se a fonte falhou, o load devolve a demonstração: aqui isso viraria uma
   // lista de assinaturas inventada, então é melhor mostrar o erro
-  if (mcp && snapshot.source !== "mcp") {
+  if (live && snapshot.source !== source) {
     throw new Error(
       snapshot.warnings[0]?.replace(/ Mostrando dados de demonstração\.$/, "") ??
-        "Não foi possível ler os lançamentos na Belvo.",
+        "Não foi possível ler os lançamentos.",
     );
   }
-  const result: RecurringResponse = {
+  return {
     from: period.from,
     to: period.to,
     source: snapshot.source,
     fetchedAt: new Date().toISOString(),
-    items: detectRecurring(snapshot.transactions, today),
+    // Só os que o usuário marcou; a detecção calcula frequência, valor e aumentos
+    items: detectRecurring(
+      snapshot.transactions,
+      today,
+      marks.map((m) => m.key),
+    ).filter((r) => r.marked),
   };
-  if (mcp) {
-    recurringMemory.set(user.id, result);
-    await writeDoc(user, "recurring_cache", result).catch(() => {});
-  }
-  return result;
 }
 
 async function load(
   user: CurrentUser,
   period: Period,
 ): Promise<FinanceSnapshot> {
-  const mcpConnected = await hasMcpSession(user);
-  const source = pickSource(mcpConnected);
+  const { source, mcpConnected } = await sourceFor(user);
+
+  if (source === "pluggy") {
+    try {
+      const data = await fetchFromPluggy(user, period.from, period.to);
+      return build("pluggy", fromPluggy(data, period.to), period, {
+        mcpConnected,
+        pluggyConnected: true,
+        connections: data.connections,
+        warnings: data.warnings,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return build("demo", fromBelvo(demoAccounts(), demoTransactions(), period.to), period, {
+        mcpConnected,
+        pluggyConnected: true,
+        warnings: [`Pluggy: ${msg} Mostrando dados de demonstração.`],
+      });
+    }
+  }
 
   if (source === "mcp") {
     try {
       const data = await fetchFromMcp(user, period.from, period.to);
       // Atualização diária automática quando os dados passam de 24 h
       await maybeAutoRefresh(user, data.connections).catch(() => {});
-      return build("mcp", data.accounts, data.transactions, period, {
+      return build("mcp", fromBelvo(data.accounts, data.transactions, period.to), period, {
         mcpConnected: true,
         connections: data.connections,
         warnings: data.institutions.length
@@ -261,7 +333,7 @@ async function load(
       });
     } catch (err) {
       const msg = friendlyMcpError(err);
-      return build("demo", demoAccounts(), demoTransactions(), period, {
+      return build("demo", fromBelvo(demoAccounts(), demoTransactions(), period.to), period, {
         mcpConnected: !(err instanceof McpAuthError),
         warnings: [
           `Belvo Panorama (MCP): ${msg} Mostrando dados de demonstração.`,
@@ -271,19 +343,19 @@ async function load(
   }
 
   if (source === "demo") {
-    return build("demo", demoAccounts(), demoTransactions(), period);
+    return build("demo", fromBelvo(demoAccounts(), demoTransactions(), period.to), period);
   }
 
   if (source === "file") {
     const file = await readExportFile();
     if (!file) {
-      return build("demo", demoAccounts(), demoTransactions(), period, {
+      return build("demo", fromBelvo(demoAccounts(), demoTransactions(), period.to), period, {
         warnings: [
           "DATA_SOURCE=file, mas data/belvo-export.json não foi encontrado.",
         ],
       });
     }
-    return build("file", file.accounts, file.transactions, period);
+    return build("file", fromBelvo(file.accounts, file.transactions, period.to), period);
   }
 
   // Fonte: API Belvo
@@ -318,13 +390,13 @@ async function load(
       }
     });
 
-    return build("belvo", accounts, transactions, period, {
+    return build("belvo", fromBelvo(accounts, transactions, period.to), period, {
       environment: cfg.env,
       warnings,
     });
   } catch (err) {
     const e = err as BelvoError;
-    return build("demo", demoAccounts(), demoTransactions(), period, {
+    return build("demo", fromBelvo(demoAccounts(), demoTransactions(), period.to), period, {
       warnings: [
         `Não foi possível falar com a Belvo (${e.status ?? "erro"}: ${e.message}). Mostrando dados de demonstração.`,
       ],

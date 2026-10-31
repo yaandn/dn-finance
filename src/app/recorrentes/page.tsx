@@ -25,16 +25,16 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { errorMessage } from "@/lib/api/http";
-import { useRecurring } from "@/lib/api/queries";
+import { useRecurring, useToggleRecurringMark } from "@/lib/api/queries";
 import { longDate, money, shortDate } from "@/lib/format";
-import type { Cadence, Recurring, RecurringKind } from "@/lib/finance/recurring";
+import { CADENCE_LABEL, type Recurring, type RecurringKind } from "@/lib/finance/recurring";
 import { cn } from "@/lib/utils";
 
 export default function RecurringPage() {
   return (
     <PageShell
       title="Recorrentes"
-      description="Assinaturas e outros gastos que se repetem, encontrados no último ano de lançamentos"
+      description="Assinaturas e gastos fixos que você marcou como recorrentes"
     >
       {(snapshot) => <RecurringView snapshot={snapshot} />}
     </PageShell>
@@ -51,13 +51,6 @@ const TABS: { value: Tab; label: string }[] = [
   { value: "tarifa", label: "Tarifas" },
 ];
 
-const CADENCE_LABEL: Record<Cadence, string> = {
-  semanal: "semanal",
-  mensal: "mensal",
-  trimestral: "trimestral",
-  semestral: "semestral",
-  anual: "anual",
-};
 
 /** Aumentos com menos de 90 dias aparecem em destaque. */
 const RECENT_CHANGE_DAYS = 90;
@@ -215,7 +208,8 @@ function RecurringView({ snapshot }: { snapshot: ShellSnapshot }) {
           </ul>
         ) : (
           <p className="text-muted-foreground py-12 text-center text-sm">
-            Nenhum gasto recorrente {snapshot.bank ? `no ${snapshot.bank}` : "encontrado"} nesta categoria.
+            Nenhum gasto recorrente marcado{snapshot.bank ? ` no ${snapshot.bank}` : ""} nesta categoria. Marque
+            em Transações, passando o mouse sobre um gasto.
           </p>
         )}
       </Card>
@@ -241,9 +235,10 @@ function RecurringView({ snapshot }: { snapshot: ShellSnapshot }) {
 
       <p className="text-muted-foreground flex gap-1.5 text-xs">
         <SparklesIcon className="mt-px size-3.5 shrink-0" />
-        Encontrados automaticamente: cobranças do mesmo lugar com intervalo regular, analisadas de{" "}
-        {query.data ? `${longDate(query.data.from)} a ${longDate(query.data.to)}` : "o último ano"}. Parcelas de
-        compras, faturas e o empréstimo ficam de fora. Atualizado a cada sincronização.
+        Só entram os estabelecimentos que você marcou em Transações (“marcar como recorrente”). Frequência,
+        valor e aumentos de preço vêm das cobranças de{" "}
+        {query.data ? `${longDate(query.data.from)} a ${longDate(query.data.to)}` : "o último ano"}. Parcelas
+        ficam de fora: já entram nas faturas futuras.
       </p>
     </>
   );
@@ -264,14 +259,17 @@ function RecurringRow({ item: r }: { item: Recurring }) {
           <div className="flex items-center gap-2">
             <span className="truncate font-medium">{r.name}</span>
             {r.status === "nova" && <Badge className="h-5 px-1.5 text-[10px]">nova</Badge>}
+            {r.marked && (
+              <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                marcada
+              </Badge>
+            )}
             {r.priceChange && (
               <TrendingUpIcon className="text-warning size-3.5 shrink-0" aria-label="Ficou mais cara" />
             )}
           </div>
           <p className="text-muted-foreground truncate text-xs">
-            {r.installments
-              ? `plano em ${r.installments.total}x · parcela ${r.installments.number}/${r.installments.total}`
-              : CADENCE_LABEL[r.cadence]}{" "}
+            {CADENCE_LABEL[r.cadence]}{" "}
             · {r.institutions.join(", ")}
             {r.nextDate ? ` · próxima ~${shortDate(r.nextDate)}` : ` · última em ${shortDate(r.lastDate)}`}
             {r.confidence === "baixa" && " · confira"}
@@ -295,6 +293,7 @@ function RecurringRow({ item: r }: { item: Recurring }) {
 }
 
 function Details({ item: r }: { item: Recurring }) {
+  const toggleMark = useToggleRecurringMark();
   const charges = [...r.charges].reverse();
   const total = r.charges.reduce((s, c) => s + c.amount, 0);
   return (
@@ -318,6 +317,20 @@ function Details({ item: r }: { item: Recurring }) {
           <p className="text-warning col-span-2">
             Subiu de {money(r.priceChange.from)} para {money(r.priceChange.to)} em{" "}
             {longDate(r.priceChange.since)}: +{money(r.priceChange.yearly)} por ano.
+          </p>
+        )}
+        {r.marked && (
+          <p className="text-muted-foreground col-span-2">
+            Marcada por você como recorrente.{" "}
+            <button
+              type="button"
+              className="text-primary underline disabled:opacity-50"
+              disabled={toggleMark.isPending}
+              // O id é o merchantKey (com "#n" quando o nome tem mais de uma série)
+              onClick={() => toggleMark.mutate({ key: r.id.split("#")[0], name: null })}
+            >
+              Desmarcar
+            </button>
           </p>
         )}
       </dl>

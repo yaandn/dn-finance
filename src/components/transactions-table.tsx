@@ -8,6 +8,7 @@ import {
   EyeIcon,
   EyeOffIcon,
   FilterXIcon,
+  RepeatIcon,
   SearchIcon,
   TagIcon,
   XIcon,
@@ -33,7 +34,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useRecurringMarks, useToggleRecurringMark } from "@/lib/api/queries";
 import { money, shortDate, weekday } from "@/lib/format";
+import { merchantKey } from "@/lib/finance/recurring";
 import type { Transaction } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +56,9 @@ export function TransactionsTable({
   const [kind, setKind] = useState<Kind>("todas");
   const [category, setCategory] = useState(initialCategory);
   const [showInternal, setShowInternal] = useState(false);
+  const { data: marks } = useRecurringMarks();
+  const toggleMark = useToggleRecurringMark();
+  const markedKeys = useMemo(() => new Set(marks?.map((m) => m.key)), [marks]);
 
   const categories = useMemo(
     () => [...new Set(transactions.map((t) => t.category))].sort((a, b) => a.localeCompare(b)),
@@ -242,7 +248,7 @@ export function TransactionsTable({
             </TableHeader>
             <TableBody>
               {filtered.map((t) => (
-                <TableRow key={t.id} className={cn(t.internal && "opacity-50")}>
+                <TableRow key={t.id} className={cn("group", t.internal && "opacity-50")}>
                   <TableCell className="pl-4">
                     <div className="tabular-nums">{shortDate(t.date)}</div>
                     <div className="text-muted-foreground text-xs capitalize">{weekday(t.date)}</div>
@@ -264,6 +270,33 @@ export function TransactionsTable({
                           )}
                           {t.internal && <span>· {t.internalReason}</span>}
                           <span className="md:hidden">{t.category}</span>
+                          {t.type === "OUTFLOW" && !t.internal && !t.installment && (() => {
+                            const key = merchantKey(t);
+                            const marked = markedKeys.has(key);
+                            return (
+                              <button
+                                type="button"
+                                disabled={toggleMark.isPending}
+                                onClick={() =>
+                                  toggleMark.mutate({ key, name: marked ? null : t.counterpart })
+                                }
+                                className={cn(
+                                  "inline-flex items-center gap-1 hover:underline",
+                                  marked
+                                    ? "text-primary"
+                                    : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                                )}
+                                title={
+                                  marked
+                                    ? "Desmarcar: volta a depender da detecção automática"
+                                    : "Conta nos recorrentes desde esta cobrança"
+                                }
+                              >
+                                <RepeatIcon className="size-3" />
+                                {marked ? "recorrente" : "marcar como recorrente"}
+                              </button>
+                            );
+                          })()}
                         </div>
                       </div>
                     </div>

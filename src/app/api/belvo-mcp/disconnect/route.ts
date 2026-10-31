@@ -14,6 +14,5 @@ export async function POST() {
   await clearMcpSession(user);
   clearMcpCache(user.id);
   await deleteDoc(user, "card_history").catch(() => {});
-  await deleteDoc(user, "recurring_cache").catch(() => {});
   return NextResponse.json({ ok: true });
 }

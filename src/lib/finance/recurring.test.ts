@@ -213,20 +213,37 @@ describe("detectRecurring", () => {
     expect(detectRecurring(list, TODAY)).toEqual([]);
   });
 
-  it("aceita assinatura paga parcelada a partir da primeira parcela", () => {
-    const list = [
-      tx({ date: "2026-09-20", amount: 29.9, counterpart: "Globo Premiere 1/12", installment: { number: 1, total: 12 } }),
-      tx({ date: "2026-09-20", amount: 29.9, counterpart: "Globo Premiere 2/12", installment: { number: 2, total: 12 }, internal: true }),
-      tx({ date: "2026-09-20", amount: 300, counterpart: "Notebook 1/10", installment: { number: 1, total: 10 } }),
-    ];
-    const found = detectRecurring(list, TODAY);
-    expect(found).toHaveLength(1);
-    expect(found[0]).toMatchObject({
-      name: "Globo Premiere",
-      kind: "assinatura",
-      monthly: 29.9,
-      yearly: 358.8,
-      installments: { number: 1, total: 12 },
+  it("ignora parcelas, mesmo de assinatura (já entram nas faturas futuras)", () => {
+    // Uma parcela por mês, como a Pluggy manda: pareceria mensal
+    const list = ["2026-07-20", "2026-08-20", "2026-09-20", "2026-10-20"].map((date, i) =>
+      tx({
+        date,
+        amount: 29.9,
+        counterpart: `Globo Premiere ${i + 1}/12`,
+        installment: { number: i + 1, total: 12 },
+      }),
+    );
+    expect(detectRecurring(list, TODAY)).toEqual([]);
+  });
+
+  it("reconhece a PSN como assinatura com duas cobranças", () => {
+    const list = ["2026-09-02", "2026-10-02"].map((date) =>
+      tx({ date, amount: 70.39, counterpart: "EBN    *PLAYSTATION" }),
+    );
+    const [psn] = detectRecurring(list, TODAY);
+    expect(psn).toMatchObject({ name: "PLAYSTATION", kind: "assinatura", cadence: "mensal" });
+  });
+
+  it("estabelecimento marcado entra desde a primeira cobrança", () => {
+    const list = [tx({ date: "2026-10-02", amount: 70.39, counterpart: "EBN    *PLAYSTATION" })];
+    expect(detectRecurring(list, TODAY)).toEqual([]);
+    const [psn] = detectRecurring(list, TODAY, ["playstation"]);
+    expect(psn).toMatchObject({
+      name: "PLAYSTATION",
+      cadence: "mensal",
+      amount: 70.39,
+      marked: true,
+      status: "nova",
     });
   });
 });

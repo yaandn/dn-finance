@@ -59,7 +59,7 @@ function Bills({
   period: Period;
 }) {
   const today = new Date().toISOString().slice(0, 10);
-  const older = useCardInstallments(snapshot.source === "mcp");
+  const older = useCardInstallments(snapshot.source === "mcp" || snapshot.source === "pluggy");
   const o = useMemo(
     () => buildBills(snapshot, today, period.from, older.data?.transactions),
     [snapshot, today, period.from, older.data],
