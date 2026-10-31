@@ -12,8 +12,10 @@ export type DocKind =
   | "widget"
   /** Cache das parcelas de compras antigas (a busca leva até um minuto). */
   | "card_history"
-  /** Gastos recorrentes detectados em um ano de lançamentos. */
-  | "recurring_cache";
+  /** Ids das conexões (itens) da Pluggy. */
+  | "pluggy"
+  /** Estabelecimentos marcados como recorrentes pelo usuário. */
+  | "recurring_marks";
 
 type DocUser = Pick<CurrentUser, "id" | "supabase">;
 

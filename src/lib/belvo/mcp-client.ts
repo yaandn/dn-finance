@@ -48,19 +48,12 @@ function cachedCovering(userId: string, from: string, to: string) {
 const HISTORY_TTL_MS = 12 * 60 * 60 * 1000;
 const historyCache = new Map<string, { at: number; data: CardHistory }>();
 
-/** Caches derivados dos dados da Belvo (ex.: recorrentes) que somem junto. */
-const clearListeners: ((userId: string) => void)[] = [];
-export function onMcpCacheClear(listener: (userId: string) => void) {
-  clearListeners.push(listener);
-}
-
 export function clearMcpCache(userId: string) {
   for (const map of [cache, historyCache]) {
     for (const key of map.keys()) {
       if (key.startsWith(`${userId}:`)) map.delete(key);
     }
   }
-  for (const listener of clearListeners) listener(userId);
 }
 
 /** Limite de requisições da Belvo (Cloudflare 1015 ou HTTP 429). */

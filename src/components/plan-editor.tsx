@@ -6,7 +6,7 @@ import { PlusIcon, SaveIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSavePlan } from "@/lib/api/queries";
-import type { FixedCost, PlanSettings } from "@/lib/finance/plan-store";
+import type { FixedCost, PlanSettings, TemporaryDebt } from "@/lib/finance/plan-store";
 
 const field = "text-muted-foreground text-xs font-medium";
 
@@ -37,6 +37,12 @@ export function PlanEditor({
     update((p) => ({
       ...p,
       fixed: p.fixed.map((f) => (f.id === id ? { ...f, ...patch } : f)),
+    }));
+
+  const setDebt = (id: string, patch: Partial<TemporaryDebt>) =>
+    update((p) => ({
+      ...p,
+      debts: p.debts.map((d) => (d.id === id ? { ...d, ...patch } : d)),
     }));
 
   function save() {
@@ -199,6 +205,130 @@ export function PlanEditor({
         <p className="text-muted-foreground text-xs">
           Marque &quot;no cartão&quot; quando a conta é cobrada no cartão de
           crédito: ela já está dentro da fatura e não é somada de novo.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-medium">Dívidas temporárias (fora do cartão)</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              update((p) => ({
+                ...p,
+                debts: [
+                  ...p.debts,
+                  {
+                    id: `d${Date.now()}`,
+                    name: "",
+                    amount: 0,
+                    day: 10,
+                    endMonth: new Date().toISOString().slice(0, 7),
+                    single: false,
+                  },
+                ],
+              }))
+            }
+          >
+            <PlusIcon /> Adicionar
+          </Button>
+        </div>
+        <div className="text-muted-foreground hidden grid-cols-[1fr_120px_90px_80px_150px_36px] gap-2 px-1 text-xs sm:grid">
+          <span>Nome</span>
+          <span>Valor</span>
+          <span>Pagamento</span>
+          <span>Dia</span>
+          <span>Última parcela / data</span>
+          <span />
+        </div>
+        {plan.debts.length === 0 && (
+          <p className="text-muted-foreground rounded-md border border-dashed p-4 text-center text-sm">
+            Nenhuma dívida. Adicione um empréstimo de alguém, um acordo, um carnê…
+          </p>
+        )}
+        {plan.debts.map((d) => (
+          <div
+            key={d.id}
+            className="grid grid-cols-[1fr_auto] gap-2 rounded-md border p-2 sm:grid-cols-[1fr_120px_90px_80px_150px_36px] sm:border-0 sm:p-0"
+          >
+            <Input
+              aria-label="Nome"
+              placeholder="Ex.: Empréstimo do João"
+              value={d.name}
+              onChange={(e) => setDebt(d.id, { name: e.target.value })}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label={`Remover ${d.name}`}
+              className="sm:order-last"
+              onClick={() =>
+                update((p) => ({
+                  ...p,
+                  debts: p.debts.filter((x) => x.id !== d.id),
+                }))
+              }
+            >
+              <Trash2Icon />
+            </Button>
+            <div className="col-span-2 grid grid-cols-[1fr_90px] gap-2 sm:contents">
+              <Input
+                aria-label={d.single ? "Valor" : "Valor da parcela"}
+                inputMode="decimal"
+                value={d.amount || ""}
+                placeholder="0,00"
+                onChange={(e) => setDebt(d.id, { amount: num(e.target.value) })}
+              />
+              <select
+                aria-label="Forma de pagamento"
+                className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                value={d.single ? "unico" : "parcelas"}
+                onChange={(e) => setDebt(d.id, { single: e.target.value === "unico" })}
+              >
+                <option value="parcelas">Parcelado</option>
+                <option value="unico">Único</option>
+              </select>
+              {d.single ? (
+                <Input
+                  aria-label="Data do pagamento"
+                  type="date"
+                  className="col-span-2 sm:col-span-2"
+                  value={`${d.endMonth}-${String(d.day).padStart(2, "0")}`}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v) setDebt(d.id, { endMonth: v.slice(0, 7), day: Number(v.slice(8, 10)) });
+                  }}
+                />
+              ) : (
+                <>
+                  <Input
+                    aria-label="Dia do pagamento"
+                    type="number"
+                    min={1}
+                    max={31}
+                    value={d.day}
+                    onChange={(e) => setDebt(d.id, { day: num(e.target.value) })}
+                  />
+                  <Input
+                    aria-label="Mês da última parcela"
+                    type="month"
+                    value={d.endMonth}
+                    onChange={(e) =>
+                      e.target.value && setDebt(d.id, { endMonth: e.target.value })
+                    }
+                  />
+                </>
+              )}
+            </div>
+          </div>
+        ))}
+        <p className="text-muted-foreground text-xs">
+          Parceladas entram todo mês até a última parcela; as de pagamento único, só no mês
+          da data. Depois saem sozinhas.
+          Para dívidas no cartão, não precisa: as parcelas já estão nas faturas.
         </p>
       </div>
 

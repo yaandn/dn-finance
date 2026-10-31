@@ -21,6 +21,11 @@
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
+  --color-alloc-1: var(--alloc-1);
+  --color-alloc-2: var(--alloc-2);
+  --color-alloc-3: var(--alloc-3);
+  --color-alloc-4: var(--alloc-4);
+  --color-alloc-5: var(--alloc-5);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -74,6 +79,12 @@
   --chart-3: oklch(0.7 0.16 70);
   --chart-4: oklch(0.62 0.19 340);
   --chart-5: oklch(0.6 0.15 155);
+  /* Áreas do direcionamento da sobra (Projeções): ordem fixa, validadas para daltonismo */
+  --alloc-1: oklch(0.5 0.2 290);
+  --alloc-2: oklch(0.65 0.15 200);
+  --alloc-3: oklch(0.7 0.16 70);
+  --alloc-4: oklch(0.62 0.19 340);
+  --alloc-5: oklch(0.6 0.15 155);
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.18 0.01 260);
   --sidebar-primary: oklch(0.45 0.2 290);
@@ -111,6 +122,12 @@
   --chart-3: oklch(0.8 0.14 75);
   --chart-4: oklch(0.72 0.17 340);
   --chart-5: oklch(0.74 0.14 155);
+  /* Mais escuras que as do gráfico: a faixa de luminosidade do tema escuro é 0,48–0,67 */
+  --alloc-1: oklch(0.66 0.16 290);
+  --alloc-2: oklch(0.66 0.12 200);
+  --alloc-3: oklch(0.66 0.14 75);
+  --alloc-4: oklch(0.66 0.17 340);
+  --alloc-5: oklch(0.66 0.14 155);
   --sidebar: oklch(0.2 0.012 270);
   --sidebar-foreground: oklch(0.96 0.005 260);
   --sidebar-primary: oklch(0.72 0.16 290);

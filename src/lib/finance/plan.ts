@@ -2,8 +2,25 @@
 // e parcelas de empréstimo, com meta de poupança e agenda de pagamentos.
 
 import type { BillsOverview } from "@/lib/finance/bills";
+import type { Cadence, Recurring } from "@/lib/finance/recurring";
 import type { FinanceSnapshot } from "@/lib/finance/types";
 import type { PlanSettings } from "@/lib/finance/plan-store";
+
+/** Dívida temporária fora do cartão, ainda com parcelas a pagar. */
+export type PlanDebt = {
+  id: string;
+  name: string;
+  amount: number;
+  day: number;
+  endMonth: string;
+  /** Parcelas que faltam, contando a próxima. */
+  remaining: number;
+  /** Pagamento único: vence em `date`. */
+  single: boolean;
+  date: string | null;
+  /** Conta nos compromissos do mês atual (o pagamento único pode ser mais adiante). */
+  current: boolean;
+};
 
 export type PlanBill = {
   key: string;
@@ -25,10 +42,24 @@ export type PlanLoan = {
   remaining: number | null;
 };
 
+/** Gasto recorrente marcado pelo usuário (assinatura, serviço, Pix fixo). */
+export type PlanRecurring = {
+  id: string;
+  name: string;
+  cadence: Cadence;
+  /** Valor de cada cobrança. */
+  amount: number;
+  /** Equivalente por mês (uma anual de 120 vira 10). */
+  monthly: number;
+  nextDate: string | null;
+  /** No cartão: já entra na fatura do mês, então não soma de novo. */
+  onCard: boolean;
+};
+
 export type AgendaItem = {
   date: string;
   name: string;
-  kind: "salario" | "fixa" | "fatura" | "emprestimo";
+  kind: "salario" | "fixa" | "fatura" | "emprestimo" | "recorrente" | "divida";
   amount: number;
   /** Conta no cartão: aparece na agenda, mas já está dentro da fatura. */
   informative: boolean;
@@ -39,7 +70,11 @@ export type MonthProjection = {
   month: string;
   income: number;
   fixed: number;
+  /** Recorrentes do mês (no cartão e fora): as faturas futuras só têm parcelas. */
+  recurring: number;
   loans: number;
+  /** Dívidas temporárias que ainda têm parcela naquele mês. */
+  debts: number;
   cardCommitted: number;
   savings: number;
   free: number;
@@ -49,10 +84,17 @@ export type Plan = {
   income: number;
   fixedTotal: number;
   fixedOnCardTotal: number;
+  recurring: PlanRecurring[];
+  /** Recorrentes fora do cartão, por mês: somam nos compromissos. */
+  recurringTotal: number;
+  /** Recorrentes no cartão, por mês: no mês atual já estão nas faturas. */
+  recurringOnCardTotal: number;
   bills: PlanBill[];
   billsTotal: number;
   loans: PlanLoan[];
   loansTotal: number;
+  debts: PlanDebt[];
+  debtsTotal: number;
   committed: number;
   savingsTarget: number;
   free: number;
@@ -98,6 +140,7 @@ export type PlanBase = {
   billsTotal: number;
   loans: PlanLoan[];
   loansTotal: number;
+  recurring: PlanRecurring[];
   cash: number;
   /** Já comprometido nos cartões para os 3 meses seguintes às faturas atuais. */
   upcomingCard: { month: string; amount: number }[];
@@ -107,14 +150,35 @@ export function computePlanBase(
   snapshot: FinanceSnapshot,
   billsOverview: BillsOverview,
   today: string,
+  /** Recorrentes marcados (de /api/recorrentes). */
+  recurringItems: Recurring[] = [],
 ): PlanBase {
-  // Faturas atuais: abertas + fechadas ainda não quitadas
-  const bills: PlanBill[] = billsOverview.cards.flatMap((c) =>
+  // Faturas atuais: as não quitadas do mês de vencimento mais próximo (e as
+  // vencidas). Uma fatura do mês seguinte já aberta (o Mercado Pago fecha dia
+  // 29) fica para a projeção, junto com as dos outros cartões daquele mês.
+  const pending = billsOverview.cards.flatMap((c) =>
     c.bills
       .filter(
         (b) =>
           ["aberta", "fechada", "vencida"].includes(b.status) &&
           b.remaining > 0,
+      )
+      .map((b) => ({ c, b })),
+  );
+  // Vencidas entram sempre, mas não definem o mês atual (senão uma fatura
+  // esquecida de setembro faria a projeção começar em outubro)
+  const currentMonth =
+    pending
+      .filter(({ b }) => b.status !== "vencida")
+      .map(({ b }) => b.month)
+      .sort()[0] ?? today.slice(0, 7);
+  const bills: PlanBill[] = billsOverview.cards.flatMap((c) =>
+    c.bills
+      .filter(
+        (b) =>
+          ["aberta", "fechada", "vencida"].includes(b.status) &&
+          b.remaining > 0 &&
+          (b.status === "vencida" || b.month <= currentMonth),
       )
       .map((b) => ({
         key: b.key,
@@ -185,14 +249,9 @@ export function computePlanBase(
   );
 
   // Próximos 3 meses: o que já está comprometido antes de qualquer gasto novo
-  // Começa depois do último mês de fatura que já entrou no plano atual
-  const start =
-    bills
-      .map((b) => b.month)
-      .sort()
-      .at(-1) ?? today.slice(0, 7);
+  // (faturas abertas e futuras de todos os cartões que vencem naquele mês)
   const upcomingCard = [1, 2, 3].map((i) => {
-    const month = addMonths(start, i);
+    const month = addMonths(currentMonth, i);
     return {
       month,
       amount: round(
@@ -204,11 +263,23 @@ export function computePlanBase(
     };
   });
 
-  return { today, bills, billsTotal, loans, loansTotal, cash, upcomingCard };
+  const recurring: PlanRecurring[] = recurringItems
+    .filter((r) => r.status !== "cancelada")
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      cadence: r.cadence,
+      amount: r.amount,
+      monthly: r.monthly,
+      nextDate: r.nextDate,
+      onCard: r.onCard,
+    }));
+
+  return { today, bills, billsTotal, loans, loansTotal, recurring, cash, upcomingCard };
 }
 
 export function applySettings(base: PlanBase, settings: PlanSettings): Plan {
-  const { today, bills, billsTotal, loans, loansTotal, cash } = base;
+  const { today, bills, billsTotal, loans, loansTotal, recurring, cash } = base;
   const income = round(settings.salary + settings.otherIncome);
   const fixedOff = settings.fixed.filter((f) => !f.onCard);
   const fixedTotal = round(fixedOff.reduce((s, f) => s + f.amount, 0));
@@ -216,7 +287,40 @@ export function applySettings(base: PlanBase, settings: PlanSettings): Plan {
     settings.fixed.filter((f) => f.onCard).reduce((s, f) => s + f.amount, 0),
   );
 
-  const committed = round(fixedTotal + billsTotal + loansTotal);
+  const recurringTotal = round(
+    recurring.filter((r) => !r.onCard).reduce((s, r) => s + r.monthly, 0),
+  );
+  const recurringOnCardTotal = round(
+    recurring.filter((r) => r.onCard).reduce((s, r) => s + r.monthly, 0),
+  );
+
+  // Dívidas temporárias: valem enquanto a próxima parcela não passa da última
+  const monthsBetween = (a: string, b: string) => {
+    const [ya, ma] = a.split("-").map(Number);
+    const [yb, mb] = b.split("-").map(Number);
+    return (yb - ya) * 12 + (mb - ma);
+  };
+  // O pagamento único entra no mês em que vence: antes dos meses projetados,
+  // nos compromissos atuais; depois, só no mês dele na projeção
+  const firstProjected = base.upcomingCard[0]?.month ?? addMonths(today.slice(0, 7), 1);
+  const debts: PlanDebt[] = (settings.debts ?? []).flatMap((d): PlanDebt[] => {
+    if (d.single) {
+      if (d.endMonth < today.slice(0, 7)) return [];
+      const [y, m] = d.endMonth.split("-").map(Number);
+      const date = iso(dateIn(y, m - 1, d.day));
+      return [{ ...d, remaining: 1, date, current: d.endMonth < firstProjected }];
+    }
+    const next = iso(nextOccurrence(today, d.day)).slice(0, 7);
+    const remaining = monthsBetween(next, d.endMonth) + 1;
+    return remaining > 0 ? [{ ...d, remaining, date: null, current: true }] : [];
+  });
+  const debtsTotal = round(
+    debts.filter((d) => d.current).reduce((s, d) => s + d.amount, 0),
+  );
+
+  const committed = round(
+    fixedTotal + recurringTotal + billsTotal + loansTotal + debtsTotal,
+  );
   const savingsTarget = round((settings.salary * settings.savingsPct) / 100);
   const free = round(income - committed - savingsTarget);
 
@@ -249,6 +353,40 @@ export function applySettings(base: PlanBase, settings: PlanSettings): Plan {
         kind: "fixa",
         amount: -f.amount,
         informative: f.onCard,
+      });
+    }
+  }
+  for (const r of recurring) {
+    if (r.nextDate && r.nextDate >= today && r.nextDate <= horizon) {
+      raw.push({
+        date: r.nextDate,
+        name: r.name,
+        kind: "recorrente",
+        amount: -r.amount,
+        informative: r.onCard,
+      });
+    }
+  }
+  for (const debt of debts) {
+    if (debt.single) {
+      // Vencido e ainda cadastrado: aparece hoje, como as faturas vencidas
+      const d = debt.date! >= today ? debt.date! : today;
+      if (d <= horizon) {
+        raw.push({ date: d, name: debt.name, kind: "divida", amount: -debt.amount, informative: false });
+      }
+      continue;
+    }
+    // A próxima parcela e a seguinte (o horizonte passa de um mês), até a última
+    const first = nextOccurrence(today, debt.day);
+    const second = dateIn(first.getUTCFullYear(), first.getUTCMonth() + 1, debt.day);
+    for (const d of [iso(first), iso(second)]) {
+      if (d > horizon || d.slice(0, 7) > debt.endMonth) continue;
+      raw.push({
+        date: d,
+        name: debt.name,
+        kind: "divida",
+        amount: -debt.amount,
+        informative: false,
       });
     }
   }
@@ -293,15 +431,29 @@ export function applySettings(base: PlanBase, settings: PlanSettings): Plan {
           .filter((l) => l.remaining == null || l.remaining > idx + 1)
           .reduce((s, l) => s + l.installment, 0),
       );
+      const debtsM = round(
+        debts
+          .filter((d) => (d.single ? month === d.endMonth : month <= d.endMonth))
+          .reduce((s, d) => s + d.amount, 0),
+      );
       return {
         month,
         income,
         fixed: fixedTotal,
+        recurring: round(recurringTotal + recurringOnCardTotal),
         loans: loansM,
+        debts: debtsM,
         cardCommitted,
         savings: savingsTarget,
         free: round(
-          income - fixedTotal - loansM - cardCommitted - savingsTarget,
+          income -
+            fixedTotal -
+            recurringTotal -
+            recurringOnCardTotal -
+            loansM -
+            debtsM -
+            cardCommitted -
+            savingsTarget,
         ),
       };
     },
@@ -311,10 +463,15 @@ export function applySettings(base: PlanBase, settings: PlanSettings): Plan {
     income,
     fixedTotal,
     fixedOnCardTotal,
+    recurring,
+    recurringTotal,
+    recurringOnCardTotal,
     bills,
     billsTotal,
     loans,
     loansTotal,
+    debts,
+    debtsTotal,
     committed,
     savingsTarget,
     free,

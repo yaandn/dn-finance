@@ -12,13 +12,9 @@ import {
 } from "lucide-react";
 
 import { AppHeader } from "@/components/app-header";
-import {
-  McpConnectCard,
-  McpDisconnectButton,
-  McpStatusMessage,
-} from "@/components/mcp-connect";
+import { McpDisconnectButton, McpStatusMessage } from "@/components/mcp-connect";
 import { PageSkeleton } from "@/components/page-skeleton";
-import { SyncControl } from "@/components/sync-control";
+import { PluggyConnectCard, PluggySyncControl } from "@/components/pluggy-connect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api/http";
@@ -30,6 +26,7 @@ import type { Period } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
 
 const SOURCE_LABEL = {
+  pluggy: { label: "Pluggy", icon: LandmarkIcon },
   mcp: { label: "Belvo Panorama", icon: LandmarkIcon },
   belvo: { label: "API Belvo", icon: PlugIcon },
   file: { label: "Arquivo exportado", icon: DatabaseIcon },
@@ -175,17 +172,15 @@ function ShellHeader({
             {source.label}
             {snapshot.environment === "sandbox" ? " · sandbox" : ""}
           </Badge>
-          {snapshot.mcpConnected && <McpDisconnectButton />}
+          {snapshot.source === "mcp" && <McpDisconnectButton />}
         </div>
       </div>
 
       <McpStatusMessage />
 
-      {snapshot.source === "mcp" && snapshot.connections && (
-        <SyncControl connections={snapshot.connections} />
-      )}
+      {snapshot.pluggyConnected && <PluggySyncControl />}
 
-      {!snapshot.mcpConnected && <McpConnectCard />}
+      {!snapshot.pluggyConnected && <PluggyConnectCard />}
 
       {snapshot.warnings.length > 0 && (
         <div className="border-warning/40 bg-warning/10 flex gap-3 rounded-lg border p-3 text-sm">

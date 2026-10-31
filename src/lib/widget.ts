@@ -6,7 +6,7 @@ import { after } from "next/server";
 import type { CurrentUser } from "@/lib/auth";
 import { decryptJson, encryptJson } from "@/lib/crypto";
 import { buildBills } from "@/lib/finance/bills";
-import { getCardInstallments, getSnapshot } from "@/lib/finance/data";
+import { getCardInstallments, getRecurring, getSnapshot } from "@/lib/finance/data";
 import { resolvePeriod } from "@/lib/finance/period";
 import { applySettings, computePlanBase } from "@/lib/finance/plan";
 import { readPlan } from "@/lib/finance/plan-store";
@@ -95,9 +95,11 @@ export async function widgetPlanSummary(
   const installments = getCardInstallments(user).catch(() => null);
   // Na Vercel, sem isso a busca seria interrompida assim que a resposta sai
   after(() => installments);
-  const [snapshot, { plan: settings, configured }, older] = await Promise.all([
+  const [snapshot, { plan: settings, configured }, recurring, older] = await Promise.all([
     getSnapshot(user, period),
     readPlan(user),
+    // Recorrentes marcados: sem eles o widget mostraria mais sobra que a página
+    getRecurring(user).catch(() => null),
     Promise.race([
       installments,
       new Promise<null>((r) => setTimeout(() => r(null), INSTALLMENTS_WAIT_MS)),
@@ -109,6 +111,7 @@ export async function widgetPlanSummary(
     snapshot,
     buildBills(snapshot, today, period.from, olderTransactions),
     today,
+    recurring?.items,
   );
   const p = applySettings(base, settings);
 
@@ -116,7 +119,7 @@ export async function widgetPlanSummary(
     updatedAt: new Date().toISOString(),
     configured,
     source: snapshot.source,
-    complete: snapshot.source !== "mcp" || older != null,
+    complete: (snapshot.source !== "mcp" && snapshot.source !== "pluggy") || older != null,
     salary: settings.salary,
     otherIncome: settings.otherIncome,
     income: p.income,

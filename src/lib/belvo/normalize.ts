@@ -8,6 +8,7 @@ import type {
   Transaction,
 } from "@/lib/finance/types";
 import { categorize } from "@/lib/finance/categories";
+import { cleanDescription, internalReason as classifyInternal } from "@/lib/finance/classify";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Raw = Record<string, any>;
@@ -122,18 +123,6 @@ export function normalizeAccount(a: Raw): Account {
   };
 }
 
-function addMonths(month: string, n: number) {
-  const [y, m] = month.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 + n, 1));
-  return d.toISOString().slice(0, 7);
-}
-
-function cleanDescription(d: string) {
-  // "Compra no débito|LOJA X" -> "LOJA X"; "Transferência enviada pelo Pix|Fulano" -> "Fulano"
-  const parts = d.split("|").map((p) => p.trim()).filter(Boolean);
-  return parts.length > 1 ? parts.slice(1).join(" · ") : d;
-}
-
 export function normalizeTransaction(
   t: Raw,
   accountsById: Map<string, Account>,
@@ -161,44 +150,21 @@ export function normalizeTransaction(
       ? (num(t.local_currency_amount) as number)
       : (num(t.amount) ?? 0);
 
-  let internal = false;
-  let internalReason: string | null = null;
-  const lowerDesc = description.toLowerCase();
-
-  if (accountCategory === "LOAN_ACCOUNT") {
-    internal = true;
-    internalReason = "Espelho da parcela já debitada na conta";
-  } else if (
-    operationType === "PAGAMENTO_FATURA" ||
-    lowerDesc === "pagamento de fatura" ||
-    (lowerDesc === "pagamento recebido" && accountCategory === "CREDIT_CARD")
-  ) {
-    internal = true;
-    internalReason = "Pagamento da fatura do próprio cartão";
-  } else if (type === "INFLOW" && lowerDesc.includes("valor adicionado na conta por cartão")) {
-    internal = true;
-    internalReason = "Crédito usado para Pix (o gasto aparece no cartão)";
-  } else if (
-    installmentTotal &&
-    installmentTotal > 1 &&
-    accountingDate &&
-    accountingDate > periodEnd
-  ) {
-    internal = true;
-    internalReason = "Parcela futura (entra em outra fatura)";
-  } else if (
-    installmentTotal &&
-    installmentTotal > 1 &&
-    (installmentNumber ?? 1) > 1 &&
-    forecast &&
-    date &&
-    forecast > addMonths(date.slice(0, 7), 1)
-  ) {
-    // O banco manda cada parcela como um lançamento com a data da compra.
-    // As que caem em faturas além da próxima não são gasto deste período.
-    internal = true;
-    internalReason = "Parcela futura (entra em outra fatura)";
-  }
+  const installment =
+    installmentTotal && installmentTotal > 1
+      ? { number: installmentNumber ?? 1, total: installmentTotal }
+      : null;
+  const internalReason = classifyInternal({
+    accountCategory,
+    type,
+    description,
+    operationType,
+    installment,
+    date,
+    accountingDate,
+    forecast,
+    periodEnd,
+  });
 
   const merchant: string | null = t.merchant?.merchant_name ?? null;
 
@@ -220,10 +186,7 @@ export function normalizeTransaction(
     rawCategory,
     subcategory,
     operationType,
-    installment:
-      installmentTotal && installmentTotal > 1
-        ? { number: installmentNumber ?? 1, total: installmentTotal }
-        : null,
+    installment,
     cardNumber: cc?.card_number ?? null,
     bill: cc
       ? {
@@ -233,7 +196,7 @@ export function normalizeTransaction(
           forecast: forecast,
         }
       : null,
-    internal,
+    internal: internalReason !== null,
     internalReason,
   };
 }

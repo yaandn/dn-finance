@@ -6,6 +6,12 @@
 // faturas fechadas (pagas ou não), a fatura aberta e as parcelas futuras.
 
 import { OTHER_BANK_BILLS } from "@/lib/finance/categories";
+import {
+  CARD_PAYMENT_REASON as PAYMENT_REASON,
+  LINKED_PAYMENT_REASON,
+  ROLLOVER_OUT_REASON,
+  SAME_BANK_BILL_PAYMENT,
+} from "@/lib/finance/classify";
 import type {
   Account,
   FinanceSnapshot,
@@ -66,7 +72,6 @@ export type BillsOverview = {
   monthly: { month: string; [cardId: string]: number | string }[];
 };
 
-const PAYMENT_REASON = "Pagamento da fatura do próprio cartão";
 const round = (n: number) => Math.round(n * 100) / 100;
 
 function addMonths(month: string, n: number) {
@@ -91,6 +96,13 @@ function withDay(month: string, day: number) {
   const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
   return `${month}-${String(Math.min(day, last)).padStart(2, "0")}`;
 }
+
+/** Dias entre o fechamento e o vencimento quando o banco não informa nenhum dos dois. */
+const DUE_AFTER_CLOSING_DAYS = 7;
+
+/** Compra feita de fato (as parcelas seguintes vêm com a data da fatura em que caem). */
+const isPurchase = (t: Transaction) =>
+  t.type === "OUTFLOW" && (!t.installment || t.installment.number === 1);
 
 /** Mês da fatura de um lançamento de cartão. */
 function billMonth(t: Transaction): string {
@@ -118,11 +130,30 @@ export function buildBills(
     const txs = [...snapshot.transactions, ...olderInstallments].filter(
       (t) => t.accountId === account.id,
     );
-    const payments = txs
-      .filter((t) => t.type === "INFLOW" && t.internalReason === PAYMENT_REASON)
-      .sort((a, b) => a.date.localeCompare(b.date));
+    const fromCard = txs.filter(
+      (t) => t.type === "INFLOW" && t.internalReason === PAYMENT_REASON,
+    );
+    // "Pagamento Fatura" na conta do mesmo banco que ainda não apareceu como
+    // crédito no cartão (os dados do cartão às vezes atualizam depois)
+    const fromAccount = snapshot.transactions.filter(
+      (t) =>
+        t.accountCategory !== "CREDIT_CARD" &&
+        t.institution === account.institution &&
+        t.internalReason === LINKED_PAYMENT_REASON &&
+        SAME_BANK_BILL_PAYMENT.test(t.description) &&
+        !fromCard.some(
+          (p) => Math.abs(p.amount - t.amount) < 0.01 && Math.abs(dayDiff(p.date, t.date)) <= 3,
+        ),
+    );
+    const payments = [...fromCard, ...fromAccount].sort((a, b) =>
+      a.date.localeCompare(b.date),
+    );
     const entries = txs.filter(
       (t) => !payments.includes(t) && t.accountCategory === "CREDIT_CARD",
+    );
+    // Quanto o banco levou para a fatura seguinte por falta de pagamento
+    const rollovers = txs.filter(
+      (t) => t.type === "INFLOW" && t.internalReason === ROLLOVER_OUT_REASON,
     );
 
     // Agrupa por mês da fatura
@@ -132,17 +163,62 @@ export function buildBills(
       groups.set(m, [...(groups.get(m) ?? []), t]);
     }
 
+    // Fatura que recebe as compras de hoje: a da compra mais recente. Sem
+    // vencimento oficial (a Pluggy não manda as faturas de todos os bancos), as
+    // de meses anteriores a ela já fecharam.
+    const latest = entries.filter(isPurchase).sort((a, b) => b.date.localeCompare(a.date))[0];
+    const openMonth = latest ? billMonth(latest) : null;
+    const closedByDate = (month: string) => !!openMonth && month < openMonth;
+
+    // Sem nenhum vencimento informado: o ciclo atual começa na primeira compra
+    // depois da última fatura fechada (num cartão de uso frequente, erra por um
+    // ou dois dias no máximo) e vence alguns dias depois de fechar.
+    const lastClosed = [...groups.keys()].filter(closedByDate).sort().at(-1);
+    const cycleStart = lastClosed
+      ? [...groups.entries()]
+          .filter(([m]) => m > lastClosed)
+          .flatMap(([, items]) => items.filter(isPurchase).map((t) => t.date))
+          .sort()[0]
+      : undefined;
+    const estimatedDueDay = cycleStart
+      ? new Date(
+          Date.UTC(2000, 0, Number(cycleStart.slice(8, 10)) + DUE_AFTER_CLOSING_DAYS),
+        ).getUTCDate()
+      : null;
+
     // Dia de vencimento: o da fatura fechada mais recente, ou o informado na conta
-    const knownDue = entries
+    // Vencimento em fim de semana passa para segunda (04/10 domingo → 05/10):
+    // o dia de referência vem do mais recente que caiu de terça a sexta
+    // (os pagamentos entram: também trazem o vencimento da fatura que quitam)
+    const knownDues = txs
       .map((t) => t.bill?.dueDate)
       .filter((d): d is string => !!d)
-      .sort()
-      .at(-1);
+      .sort();
+    const knownDue =
+      knownDues.findLast((d) => {
+        const weekday = new Date(`${d}T12:00:00Z`).getUTCDay();
+        return weekday >= 2 && weekday <= 5;
+      }) ?? knownDues.at(-1);
     const dueDay = knownDue
       ? Number(knownDue.slice(8, 10))
       : account.credit?.cuttingDate
         ? Number(account.credit.cuttingDate.slice(8, 10))
-        : null;
+        : estimatedDueDay;
+
+    // Dias entre o fechamento e o vencimento, das faturas oficiais (Mercado Pago:
+    // fecha em 29/09, vence em 05/10). Com isso a fatura que ainda não chegou
+    // pela API fecha na data certa, mesmo sem compra depois do fechamento.
+    const lastOfficial = entries
+      .map((t) => t.bill)
+      .filter((b) => !!b?.closingDate && !!b.dueDate)
+      .sort((a, b) => a!.dueDate!.localeCompare(b!.dueDate!))
+      .at(-1);
+    const closingGap = lastOfficial
+      ? dayDiff(lastOfficial.dueDate!, lastOfficial.closingDate!)
+      : null;
+    const isClosed = (month: string, dueDate: string | null) =>
+      closedByDate(month) ||
+      (closingGap !== null && !!dueDate && dayDiff(dueDate, today) - closingGap <= 0);
 
     const bills: Bill[] = [...groups.entries()].map(([month, items]) => {
       const official =
@@ -163,7 +239,7 @@ export function buildBills(
       }
 
       const dueDate =
-        official?.dueDate ?? (dueDay ? withDay(month, dueDay) : null);
+        official?.dueDate ?? (dueDay ? nextBusinessDay(withDay(month, dueDay)) : null);
       const amount = round(official?.amount ?? itemsTotal);
       return {
         key: `${account.id}:${month}`,
@@ -176,7 +252,7 @@ export function buildBills(
         amount,
         paid: 0,
         remaining: amount,
-        status: official?.dueDate ? "fechada" : "aberta",
+        status: official?.dueDate || (dueDate && isClosed(month, dueDate)) ? "fechada" : "aberta",
         items: items.sort((a, b) => b.date.localeCompare(a.date)),
         payments: [],
         byCategory: [...cats.entries()]
@@ -209,7 +285,44 @@ export function buildBills(
     const payable = closed.filter(
       (b) => !windowStart || b.dueDate! >= windowStart,
     );
+    // Saldo que o banco levou para a fatura seguinte, informado logo após o vencimento
+    const rolloverOf = (b: Bill) =>
+      b.dueDate
+        ? rollovers.find((r) => {
+            const diff = dayDiff(r.date, b.dueDate!);
+            return diff >= -3 && diff <= 10;
+          })
+        : undefined;
+    const paidAfterDue = (b: Bill) =>
+      b.payments.filter((p) => p.date >= b.dueDate!).reduce((sum, p) => sum + p.amount, 0);
     for (const p of payments) {
+      // O banco disse qual fatura o pagamento quita (faturas oficiais da Pluggy,
+      // como no Mercado Pago). Se ela está fora do período, não vai para outra.
+      if (p.bill?.closingDate && p.bill.dueDate) {
+        const own = closed.find((b) => b.dueDate === p.bill!.dueDate);
+        if (own) {
+          own.paid = round(own.paid + p.amount);
+          own.payments.push(p);
+        }
+        continue;
+      }
+      // Pagamento depois do vencimento de uma fatura que ficou em aberto: quita ela
+      const rolled = payable.find((b) => {
+        const r = rolloverOf(b);
+        const diff = dayDiff(p.date, b.dueDate!);
+        return r && diff >= 0 && diff <= 40 && paidAfterDue(b) + 0.01 < r.amount;
+      });
+      // Faturas de valor estimado: pagamento antes do vencimento vai para ela
+      // (a soma estimada pode passar do real e "segurar" o pagamento seguinte)
+      const upcoming = payable
+        .filter((b) => b.dueEstimated && b.dueDate! >= p.date)
+        .sort((a, b) => a.dueDate!.localeCompare(b.dueDate!))[0];
+      if (rolled ?? upcoming) {
+        const target = (rolled ?? upcoming)!;
+        target.paid = round(target.paid + p.amount);
+        target.payments.push(p);
+        continue;
+      }
       const candidates = payable.filter((b) => {
         const diff = dayDiff(b.dueDate!, p.date);
         return diff <= 40 && diff >= -45;
@@ -236,6 +349,23 @@ export function buildBills(
     for (const b of bills) {
       if (b.status === "fechada") {
         b.remaining = round(Math.max(0, b.amount - b.paid));
+        // O banco informou o saldo que ficou em aberto no vencimento: vale mais
+        // que a soma estimada dos lançamentos. Quitado se os pagamentos depois
+        // do vencimento cobriram esse saldo.
+        const rollover = rolloverOf(b);
+        if (rollover) {
+          b.remaining = round(Math.max(0, rollover.amount - paidAfterDue(b)));
+        } else if (
+          rollovers.length &&
+          b.dueEstimated &&
+          b.dueDate &&
+          b.dueDate < today &&
+          b.payments.length
+        ) {
+          // Este banco leva o saldo não pago para a fatura seguinte; se não levou
+          // nada no vencimento, a fatura foi quitada (a diferença é da estimativa)
+          b.remaining = 0;
+        }
         if (b.remaining <= 1) {
           b.status = "paga";
           const last = b.payments.at(-1)?.date;

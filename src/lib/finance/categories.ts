@@ -65,7 +65,7 @@ export const SUBSCRIPTION_SUBCATEGORIES = new Set([
 ]);
 
 const SUBSCRIPTION_NAMES =
-  /(netflix|spotify|disney|globo|apple|ifood club|uber one|meli\+|youtube|prime video|amazon prime|hbo|\bmax\b|deezer|cursor|chatgpt|openai|anthropic|claude|github|aws|google one|icloud|canva|notion)/i;
+  /(netflix|spotify|disney|globo|apple|ifood club|uber one|meli\+|youtube|prime video|amazon prime|hbo|\bmax\b|deezer|cursor|chatgpt|openai|anthropic|claude|github|aws|google one|icloud|canva|notion|playstation|\bpsn\b|xbox|game ?pass|nintendo|ea play|ubisoft)/i;
 
 const NOT_SUBSCRIPTION_NAMES = /(cinemark|cinepolis|kinoplex|\buci\b|ingresso\.com)/i;
 

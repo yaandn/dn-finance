@@ -45,10 +45,20 @@ export type Recurring = {
   priceChange: PriceChange | null;
   /** O valor oscila sem um degrau claro (conta de consumo, cobrança em dólar). */
   variable: boolean;
-  /** Plano pago parcelado no cartão (ex.: anual em 12x): parcela atual e total. */
-  installments: { number: number; total: number } | null;
+  /** Marcado como recorrente pelo usuário (entra desde a primeira cobrança). */
+  marked: boolean;
+  /** Cobrado no cartão de crédito (a última cobrança): entra na fatura. */
+  onCard: boolean;
   institutions: string[];
   charges: RecurringCharge[];
+};
+
+export const CADENCE_LABEL: Record<Cadence, string> = {
+  semanal: "semanal",
+  mensal: "mensal",
+  trimestral: "trimestral",
+  semestral: "semestral",
+  anual: "anual",
 };
 
 const CYCLE_DAYS: Record<Cadence, number> = {
@@ -262,15 +272,21 @@ function nextCharge(lastDate: string, cycle: number, today: string) {
   return addDays(lastDate, Math.round(cycle * k));
 }
 
-export function detectRecurring(transactions: Transaction[], today: string): Recurring[] {
+export function detectRecurring(
+  transactions: Transaction[],
+  today: string,
+  /** Estabelecimentos (merchantKey) que o usuário marcou como recorrentes. */
+  marked: string[] = [],
+): Recurring[] {
+  const markedKeys = new Set(marked);
   const outflows = transactions.filter(
     (t) =>
       t.type === "OUTFLOW" &&
       !t.internal &&
       t.accountCategory !== "LOAN_ACCOUNT" &&
       t.accountCategory !== "FINANCING_ACCOUNT" &&
-      // Parcelas são compras, exceto assinatura paga parcelada (plano anual em 12x)
-      (!(t.installment && t.installment.total > 1) || looksLikeSubscription(t)) &&
+      // Parcelas já entram nas faturas futuras (inclusive plano anual em 12x)
+      !(t.installment && t.installment.total > 1) &&
       !SKIP_CATEGORIES.has(t.category),
   );
 
@@ -317,17 +333,13 @@ export function detectRecurring(transactions: Transaction[], today: string): Rec
   const found: Recurring[] = [];
   for (const [key, list] of groups) {
     list.sort((a, b) => a.date.localeCompare(b.date));
-    const plan = installmentPlan(list, today, key);
-    if (plan) {
-      found.push(plan);
-      continue;
-    }
-    if (list.length < 2) continue;
-    const series = splitSeries(list);
-    series.forEach((s, index) => {
-      const item = evaluate(s, today, series.length > 1 ? `${key}#${index}` : key);
-      if (item) found.push(item);
-    });
+    const isMarked = markedKeys.has(key);
+    const series = list.length < 2 ? [] : splitSeries(list);
+    const detected = series
+      .map((s, index) => evaluate(s, today, series.length > 1 ? `${key}#${index}` : key))
+      .filter((item): item is Recurring => !!item);
+    if (isMarked && !detected.length) detected.push(markedItem(list, today, key));
+    found.push(...detected.map((item) => (isMarked ? { ...item, marked: true, confidence: "alta" as const } : item)));
   }
 
   // Duas séries do mesmo nome (ex.: dois planos da Apple): diferencia pelo valor
@@ -340,20 +352,17 @@ export function detectRecurring(transactions: Transaction[], today: string): Rec
 }
 
 /**
- * Assinatura paga parcelada: a primeira parcela já basta, porque o número de
- * parcelas diz quanto tempo o plano dura. Vale como mensal enquanto houver parcelas.
+ * Estabelecimento marcado pelo usuário que o detector ainda não aceita (uma
+ * cobrança só, ou intervalos irregulares): vale como mensal, no último valor.
  */
-function installmentPlan(list: Charge[], today: string, id: string): Recurring | null {
+function markedItem(list: Charge[], today: string, id: string): Recurring {
   const latest = list.at(-1)!;
-  const inst = latest.t.installment;
-  if (!inst || inst.total <= 1) return null;
-  const amount = latest.amount;
-  const remaining = inst.total - inst.number;
   const cycle = CYCLE_DAYS.mensal;
+  const since = days(latest.date, today);
   const status: RecurringStatus =
-    remaining <= 0 && days(latest.date, today) > cycle
+    since > cycle * 1.5 + tolerance("mensal", 1)
       ? "cancelada"
-      : inst.number <= 2
+      : days(list[0].date, today) < cycle * 2.5
         ? "nova"
         : "ativa";
   return {
@@ -361,19 +370,20 @@ function installmentPlan(list: Charge[], today: string, id: string): Recurring |
     name: displayName(latest.t),
     logo: list.findLast((c) => c.t.merchantLogo)?.t.merchantLogo ?? null,
     category: latest.t.category,
-    kind: "assinatura",
+    kind: kindOf(latest.t),
     cadence: "mensal",
-    amount,
-    monthly: amount,
-    yearly: round(amount * 12),
+    amount: latest.amount,
+    monthly: latest.amount,
+    yearly: round(latest.amount * 12),
     confidence: "alta",
     status,
     firstDate: list[0].date,
     lastDate: latest.date,
-    nextDate: remaining > 0 ? nextCharge(latest.date, cycle, today) : null,
+    nextDate: status === "cancelada" ? null : nextCharge(latest.date, cycle, today),
     priceChange: null,
     variable: false,
-    installments: inst,
+    marked: true,
+    onCard: latest.t.accountCategory === "CREDIT_CARD",
     institutions: [...new Set(list.map((c) => c.institution))],
     charges: list.map(({ id, date, amount, institution }) => ({ id, date, amount, institution })),
   };
@@ -454,7 +464,8 @@ function evaluate(series: Charge[], today: string, id: string): Recurring | null
     nextDate: status === "cancelada" ? null : nextCharge(lastDate, cycle, today),
     priceChange,
     variable,
-    installments: null,
+    marked: false,
+    onCard: latest.accountCategory === "CREDIT_CARD",
     institutions: [...new Set(series.map((c) => c.institution))],
     charges: series.map(({ id, date, amount, institution }) => ({
       id,

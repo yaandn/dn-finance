@@ -27,7 +27,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { useCachedRecurring } from "@/lib/api/queries";
+import { useRecurring } from "@/lib/api/queries";
 import { analyze, type Alert } from "@/lib/finance/analyze";
 import { money, percent, longDate } from "@/lib/format";
 import type { Period } from "@/lib/finance/types";
@@ -359,10 +359,9 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <p className="text-muted-foreground py-6 text-center text-sm">{children}</p>;
 }
 
-/** Resumo dos gastos recorrentes (detectados em um ano, em /api/recorrentes). */
+/** Resumo dos gastos recorrentes marcados pelo usuário (/api/recorrentes). */
 function RecurringCard({ bank, query }: { bank: string | null; query: string }) {
-  // Só o que já foi calculado: a análise de um ano fica na página Recorrentes
-  const { data, isPending, error } = useCachedRecurring();
+  const { data, isPending, error } = useRecurring();
   const items = (data?.items ?? []).filter(
     (r) => r.status !== "cancelada" && (!bank || r.institutions.includes(bank)),
   );
@@ -431,7 +430,7 @@ function RecurringCard({ bank, query }: { bank: string | null; query: string }) 
             </ul>
           </>
         ) : (
-          <Empty>Nenhum gasto recorrente identificado.</Empty>
+          <Empty>Nenhum gasto marcado como recorrente. Marque em Transações.</Empty>
         )}
       </CardContent>
     </Card>

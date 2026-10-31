@@ -27,6 +27,7 @@ const NAV = [
   { href: "/faturas", label: "Faturas" },
   { href: "/recorrentes", label: "Recorrentes" },
   { href: "/planejamento", label: "Planejamento" },
+  { href: "/projecoes", label: "Projeções" },
   { href: "/contas", label: "Contas e dívidas" },
 ];
 

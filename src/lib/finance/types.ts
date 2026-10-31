@@ -1,7 +1,7 @@
 import type { Recurring } from "@/lib/finance/recurring";
 
 // Modelo normalizado usado pela interface. Qualquer fonte de dados
-// (API Belvo, arquivo exportado ou modo demonstração) é convertida para cá.
+// (Pluggy, API Belvo, arquivo exportado ou modo demonstração) é convertida para cá.
 
 export type AccountCategory =
   | "CHECKING_ACCOUNT"
@@ -80,13 +80,15 @@ export type Transaction = {
     name: string | null;
     /** Mês da fatura em que o lançamento cai (YYYY-MM), informado pelo banco. */
     forecast: string | null;
+    /** Fechamento oficial da fatura (só quando o banco manda as faturas). */
+    closingDate?: string | null;
   } | null;
   /** Movimentações que não são gasto nem renda reais (pagamento da própria fatura etc.). */
   internal: boolean;
   internalReason: string | null;
 };
 
-export type DataSource = "mcp" | "belvo" | "file" | "demo";
+export type DataSource = "pluggy" | "mcp" | "belvo" | "file" | "demo";
 
 export type FinanceSnapshot = {
   source: DataSource;
@@ -98,12 +100,17 @@ export type FinanceSnapshot = {
   warnings: string[];
   /** Há uma sessão do Belvo Panorama (MCP) salva neste computador. */
   mcpConnected: boolean;
-  /** Quando cada banco foi sincronizado pela última vez (só na fonte MCP). */
+  /** O usuário tem conexões da Pluggy salvas. */
+  pluggyConnected: boolean;
+  /** Quando cada banco foi sincronizado pela última vez (fontes MCP e Pluggy). */
   connections?: {
     connectionId: string;
     institution: string;
     status: string;
     lastSyncedAt: string | null;
+    /** Só na Pluggy: próxima atualização automática e erro da conexão. */
+    nextSyncAt?: string | null;
+    error?: string | null;
   }[];
 };
 

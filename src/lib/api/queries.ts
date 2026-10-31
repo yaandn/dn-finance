@@ -8,6 +8,7 @@ import {
 import { http } from "@/lib/api/http";
 import type { SyncState } from "@/lib/belvo/mcp-sync";
 import type { PlanSettings } from "@/lib/finance/plan-store";
+import type { PluggyConnection } from "@/lib/pluggy/data";
 import type {
   CardInstallmentsResponse,
   RecurringResponse,
@@ -24,8 +25,9 @@ export const queryKeys = {
     ["snapshot", "range", from, to] as const,
   installments: ["snapshot", "installments"] as const,
   recurring: ["snapshot", "recurring"] as const,
-  recurringCached: ["snapshot", "recurring", "cached"] as const,
+  recurringMarks: ["recurring-marks"] as const,
   sync: ["sync"] as const,
+  pluggyItems: ["pluggy-items"] as const,
   plan: ["plan"] as const,
   widgetToken: ["widget-token"] as const,
 };
@@ -78,34 +80,41 @@ export function useCardInstallments(enabled = true) {
   });
 }
 
+/** Painel e página Recorrentes compartilham o mesmo resultado (mesma chave). */
 export function useRecurring() {
-  const queryClient = useQueryClient();
   return useQuery({
     queryKey: queryKeys.recurring,
-    queryFn: async ({ signal }) => {
-      const data = (await http.get<RecurringResponse>("/recorrentes", { signal })).data;
-      // O card do Painel passa a mostrar o mesmo resultado
-      queryClient.setQueryData(queryKeys.recurringCached, data);
-      return data;
-    },
-    // Um ano de lançamentos: a busca é longa e muda pouco
-    staleTime: 60 * 60 * 1000,
-    // Repetir sozinho dobra as ~100 chamadas à Belvo e piora o limite
+    queryFn: async ({ signal }) =>
+      (await http.get<RecurringResponse>("/recorrentes", { signal })).data,
+    staleTime: 5 * 60 * 1000,
+    // Na fonte Belvo (MCP) repetir sozinho dobra as ~100 chamadas e piora o limite
     retry: false,
   });
 }
 
-/** Só o resultado já calculado (null se ainda não houver); não vai à Belvo. */
-export function useCachedRecurring() {
-  const queryClient = useQueryClient();
+export type RecurringMark = { key: string; name: string; addedAt: string };
+
+/** Estabelecimentos que o usuário marcou como recorrentes. */
+export function useRecurringMarks() {
   return useQuery({
-    queryKey: queryKeys.recurringCached,
-    queryFn: async ({ signal }) =>
-      // Se a página Recorrentes já carregou nesta sessão, usa o mesmo resultado
-      queryClient.getQueryData<RecurringResponse>(queryKeys.recurring) ??
-      (await http.get<RecurringResponse | null>("/recorrentes", { params: { cache: 1 }, signal }))
-        .data,
-    staleTime: 5 * 60 * 1000,
+    queryKey: queryKeys.recurringMarks,
+    queryFn: async () => (await http.get<RecurringMark[]>("/recorrentes/marcas")).data,
+    staleTime: Infinity,
+  });
+}
+
+/** Marca (name) ou desmarca (name null) um estabelecimento como recorrente. */
+export function useToggleRecurringMark() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ key, name }: { key: string; name: string | null }) => {
+      if (name === null) await http.delete("/recorrentes/marcas", { params: { key } });
+      else await http.post("/recorrentes/marcas", { key, name });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.recurringMarks });
+      return queryClient.invalidateQueries({ queryKey: queryKeys.recurring });
+    },
   });
 }
 
@@ -137,6 +146,58 @@ export function useDisconnectMcp() {
     },
     onSuccess: () => {
       queryClient.removeQueries({ queryKey: queryKeys.sync });
+      return queryClient.invalidateQueries({ queryKey: queryKeys.snapshots });
+    },
+  });
+}
+
+/** Conexões da Pluggy; enquanto algum banco atualiza, consulta de novo sozinha. */
+export function usePluggyItems() {
+  return useQuery({
+    queryKey: queryKeys.pluggyItems,
+    queryFn: async () => (await http.get<PluggyConnection[]>("/pluggy/items")).data,
+    staleTime: 0,
+    refetchInterval: (query) =>
+      query.state.data?.some((c) => c.status === "UPDATING") ? SYNC_POLL_MS : false,
+  });
+}
+
+/** Pede à Pluggy para buscar dados novos nos bancos (roda em segundo plano lá). */
+export function useStartPluggySync() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () =>
+      (
+        await http.post<{ connections: PluggyConnection[]; errors: string[] }>(
+          "/pluggy/sync",
+        )
+      ).data,
+    onSuccess: (res) => queryClient.setQueryData(queryKeys.pluggyItems, res.connections),
+  });
+}
+
+/** Salva o item criado pelo Pluggy Connect e recarrega os dados. */
+export function useAddPluggyItem() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (itemId: string) => {
+      await http.post("/pluggy/items", { itemId });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.pluggyItems });
+      return queryClient.invalidateQueries({ queryKey: queryKeys.snapshots });
+    },
+  });
+}
+
+export function useRemovePluggyItem() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (itemId: string) => {
+      await http.delete("/pluggy/items", { params: { item: itemId } });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.pluggyItems });
       return queryClient.invalidateQueries({ queryKey: queryKeys.snapshots });
     },
   });
